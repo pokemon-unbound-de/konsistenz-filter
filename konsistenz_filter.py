@@ -762,6 +762,9 @@ def main() -> int:
                  "en_variants": g["en_variants"],
                  "de_variants": [{"raw": v[2], "count": v[0]}
                                  for v in g["de_variants"]],
+                 "near": g["near"],
+                 "sim_min": (None if g.get("sim_min") is None
+                             else round(g["sim_min"], 4)),
                  **decisions[g["gruppe"]]}
                 for g in groups],
         }, fh, ensure_ascii=False, indent=1)
