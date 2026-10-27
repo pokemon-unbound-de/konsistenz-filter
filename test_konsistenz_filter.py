@@ -246,6 +246,166 @@ class KonsistenzFilterTests(unittest.TestCase):
         ])
         patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
         self.assertEqual(self.load_results(), [])
+        # Grass-Typ: EN "Grass-type" == DE "Pflanze" (offizieller DE-Name)
+        self.assertIn(kf.PH_L + "T:GRASS" + kf.PH_R, kf.norm_text("Grass-type moves"))
+        self.assertIn(kf.PH_L + "t:grass" + kf.PH_R,
+                      kf.de_key("Pflanze-Attacken"))
+
+    def test_postgen3_types_are_tokenized(self):
+        self.assertIn(kf.PH_L + "T:STEEL" + kf.PH_R, kf.norm_text("Steel-type moves"))
+        self.assertIn(kf.PH_L + "T:DARK" + kf.PH_R, kf.norm_text("Dark-type data"))
+        self.assertIn(kf.PH_L + "T:PSYCHIC" + kf.PH_R,
+                      kf.norm_text("Psychic-type moves"))
+        self.assertIn(kf.PH_L + "t:steel" + kf.PH_R, kf.de_key("Stahl-Attacken"))
+        self.assertIn(kf.PH_L + "t:dark" + kf.PH_R, kf.de_key("Typ Unlicht"))
+        self.assertIn(kf.PH_L + "t:psychic" + kf.PH_R, kf.de_key("Typ Psycho"))
+
+    def test_color_template_is_suppressed(self):
+        # Farben: begrenztes Wortset, das als Slot zählt (kleingeschrieben)
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "This jewel was found in the large room on the first floor beneath a red crystal.",
+             "Dieser Schmuckstein lag im großen Raum im Erdgeschoss unter einem roten Kristall.",
+             "scripts", ""),
+            ("0x0002",
+             "This jewel was found in the large room on the first floor beneath a blue crystal.",
+             "Dieser Schmuckstein lag im großen Raum im Erdgeschoss unter einem blauen Kristall.",
+             "scripts", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        self.assertEqual(self.load_results(), [])
+
+    def test_structural_name_template_without_glossary_is_suppressed(self):
+        # Namen NICHT im Glossar: Struktur-Erkennung muss reichen
+        # (großgeschriebene EN-Wörter als Namen, gleiche Slot-Anzahl DE)
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "Have Zorba hold this, and this stone will enable it to Mega Evolve during battle.",
+             "Trägt Zorbla diesen Stein, kann es im Kampf die Mega-Entwicklung vollziehen.",
+             "gap_item_desc", ""),
+            ("0x0002",
+             "Have Quibla hold this, and this stone will enable it to Mega Evolve during battle.",
+             "Trägt Quiblo diesen Stein, kann es im Kampf die Mega-Entwicklung vollziehen.",
+             "gap_item_desc", ""),
+            ("0x0003",
+             "Have Mufflo hold this, and this stone will enable it to Mega Evolve during battle.",
+             "Trägt Muffla diesen Stein, kann es im Kampf die Mega-Entwicklung vollziehen.",
+             "gap_item_desc", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        self.assertEqual(self.load_results(), [])
+        with open(os.path.join(self.out_dir, "konsistenz_results.json"),
+                  encoding="utf-8") as fh:
+            data = json.load(fh)
+        self.assertEqual(len(data["suppressed_templates"]), 1)
+        self.assertEqual(data["suppressed_templates"][0]["ids"],
+                         ["0x0001", "0x0002", "0x0003"])
+
+    def test_lowercase_en_variation_is_not_suppressed(self):
+        # forest/woods: kleine Wörter sind KEINE Namen -> Gruppe bleibt stehen
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "We walked a very long road through the forest all day to reach this place.",
+             "Wir gingen den ganzen Tag einen sehr langen Weg durch den Wald, um diesen Ort zu erreichen.",
+             "scripts", ""),
+            ("0x0002",
+             "We walked a very long road through the woods all day to reach this place.",
+             "Wir gingen den ganzen Tag einen sehr langen Weg durch die Wälder, um diesen Ort zu erreichen.",
+             "scripts", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        rows = self.load_results()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["vorschlag"],
+                         "Wir gingen den ganzen Tag einen sehr langen Weg durch den Wald, um diesen Ort zu erreichen.")
+        self.assertIn("Majorität", rows[0]["grund"])
+
+    def test_type_mismatch_row_keeps_group(self):
+        # EN Fire-type, DE aber "Typ Wasser" -> Typ-Korrespondenz pro Zeile
+        # schlägt fehl -> Gruppe bleibt (echte Inkonsistenz)
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "This is a crystallized form of Z-Power. It upgrades Bug-type moves to Z-Moves.",
+             "Eine kristallisierte Form der Z-Kraft. Sie wandelt Attacken vom Typ Käfer in Z-Moves.",
+             "gap_item_desc", ""),
+            ("0x0002",
+             "This is a crystallized form of Z-Power. It upgrades Fire-type moves to Z-Moves.",
+             "Eine kristallisierte Form der Z-Kraft. Sie wandelt Attacken vom Typ Wasser in Z-Moves.",
+             "gap_item_desc", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        self.assertEqual(len(self.load_results()), 1)
+
+    def test_glossary_name_mismatch_row_keeps_group(self):
+        # Zeile 3: EN sagt Candice, DE aber Lärch -> korrespondiert nicht
+        # -> Gruppe bleibt stehen (falscher Name sichtbar)
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "Today Log says hello to everyone who is gathered in the big castle.",
+             "Heute sagt Lärch allen, die sich im großen Schloss versammelt haben, Hallo.",
+             "scripts", ""),
+            ("0x0002",
+             "Today Candice says hello to everyone who is gathered in the big castle.",
+             "Heute sagt Frida allen, die sich im großen Schloss versammelt haben, Hallo.",
+             "scripts", ""),
+            ("0x0003",
+             "Today Candice says hello to everyone who is gathered in the big castle.",
+             "Heute sagt Lärch allen, die sich im großen Schloss versammelt haben, Hallo.",
+             "scripts", ""),
+        ])
+        make_glossary(self.gloss_path, [("Lärch", "Log"), ("Frida", "Candice")])
+        patched_argv(["--csv", self.csv_path, "--glossary", self.gloss_path,
+                      "--out-dir", self.out_dir])
+        rows = self.load_results()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["ids"], "0x0001,0x0002,0x0003")
+
+    def test_first_last_position_diff_is_kept(self):
+        # Differenz nur im ersten Wort (Punktuation) ist KEIN Slot —
+        # Blocking fixiert erstes/letztes Wort -> Gruppe bleibt
+        make_csv(self.csv_path, [
+            ("0x0001", "Aww no!", "Aww, nein!", "scripts", ""),
+            ("0x0002", "Aww, no!", "Aww, weh!", "scripts", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        self.assertEqual(len(self.load_results()), 1)
+
+    def test_punctuation_en_variants_are_both_listed(self):
+        # EN-Varianten, die nur in Punktuation differieren, werden gemerged
+        # und beide werden in en_varianten gelistet (Transparenz)
+        make_csv(self.csv_path, [
+            ("0x0001", "The Def and Sp. Def stats are swapped in the room!",
+             "Vert. und Sp.-Vert. sind getauscht!", "scripts", ""),
+            ("0x0002", "The Def. and Sp. Def stats are swapped in the room!",
+             "Die Werte von Verteidigung und Sp.-Verteidigung sind vertauscht.",
+             "scripts", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        rows = self.load_results()
+        self.assertEqual(len(rows), 1)
+        self.assertIn("The Def and Sp. Def stats are swapped in the room!",
+                      rows[0]["en_varianten"])
+        self.assertIn("The Def. and Sp. Def stats are swapped in the room!",
+                      rows[0]["en_varianten"])
+
+    def test_type_token_does_not_match_glossary_name(self):
+        # Glossar-Eintrag "Seher | Psychic" (Trainerklasse) darf durch den
+        # Typ-Token <T:PSYCHIC> NICHT als Namens-Treffer gezählt werden —
+        # sonst würde die (korrekte) Typ-Vorlage nicht unterdrückt.
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "This is a crystallized form of Z-Power. It upgrades Psychic-type moves to Z-Moves.",
+             "Eine kristallisierte Form der Z-Kraft. Sie wandelt Attacken vom Typ Psycho in Z-Attacken um.",
+             "gap_item_desc", ""),
+            ("0x0002",
+             "This is a crystallized form of Z-Power. It upgrades Bug-type moves to Z-Moves.",
+             "Eine kristallisierte Form der Z-Kraft. Sie wandelt Attacken vom Typ Käfer in Z-Attacken um.",
+             "gap_item_desc", ""),
+        ])
+        make_glossary(self.gloss_path, [("Seher", "Psychic")])
+        patched_argv(["--csv", self.csv_path, "--glossary", self.gloss_path,
+                      "--out-dir", self.out_dir])
+        self.assertEqual(self.load_results(), [])
 
     def test_same_en_with_name_swap_kept_and_glossary_decides(self):
         make_csv(self.csv_path, [

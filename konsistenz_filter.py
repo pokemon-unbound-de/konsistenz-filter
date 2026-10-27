@@ -59,21 +59,38 @@ BUFFER_RE = re.compile(r"\[?#?FD([0-9A-Fa-f]{2})\]")
 NONWORD_RE = re.compile(r"[^a-z0-9]+")
 FORMAL_SIE_RE = re.compile(r"\bSie\b")
 PH_L, PH_R = "\u27e8", "\u27e9"
-SLOT = f"{PH_L}SLOT{PH_R}"
 QUOTES = {
     "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
     "\u2013": "-", "\u2014": "-", "\u2026": "...",
 }
 
-# Pokemon types (Gen 3): EN word -> canonical token / DE word
+# Pokemon types: EN word -> canonical token / DE word. All 18 official
+# types (Unbound contains Pokemon beyond Gen 3, so Steel/Dark/Fairy occur).
 TYPE_PAIRS = [
     ("Normal", "Normal"), ("Fire", "Feuer"), ("Water", "Wasser"),
-    ("Electric", "Elektro"), ("Grass", "Grass"), ("Ice", "Eis"),
+    ("Electric", "Elektro"), ("Grass", "Pflanze"), ("Ice", "Eis"),
     ("Fighting", "Kampf"), ("Poison", "Gift"), ("Ground", "Boden"),
-    ("Flying", "Flug"), ("Psycho", "Psycho"), ("Bug", "Käfer"),
+    ("Flying", "Flug"), ("Psychic", "Psycho"), ("Bug", "Käfer"),
     ("Rock", "Gestein"), ("Ghost", "Geist"), ("Dragon", "Drache"),
+    ("Steel", "Stahl"), ("Dark", "Unlicht"), ("Fairy", "Fee"),
 ]
+# Bounded lowercase slot words: colors (bounded, safe set). EN color words
+# are lowercase, so they need an explicit allow-list to count as
+# substitution slots (forest/woods etc. stay excluded).
+COLOR_WORDS = {"red", "blue", "green", "yellow", "orange", "purple",
+               "pink", "white", "black", "brown", "gray", "grey"}
 KONTEXT = "Kontext prüfen"
+
+# Canonical type-token shape produced by norm_text (capture group = type
+# name). Used for per-row type checks and to KEEP type words out of name
+# matching (a token like <T:PSYCHIC> must not match the glossary name
+# "Psychic").
+TYPE_TOKEN_RE = re.compile(rf"{PH_L}[Tt]:([A-Za-z0-9]+){PH_R}")
+
+
+def name_check_text(s: str) -> str:
+    """Text with type tokens blanked out, for glossary name matching."""
+    return TYPE_TOKEN_RE.sub(" ", s)
 
 
 # --------------------------------------------------------------------------
@@ -171,19 +188,51 @@ def name_in_text(name: str, text: str) -> bool:
     return re.search(rf"(?<!\w){esc}(?:s|es)?(?!\w)", text, re.IGNORECASE) is not None
 
 
-def slot_names(text: str, names: list[str]) -> str:
-    """Anonymize glossary names to an anonymous slot token (longest first,
-    inflection suffixes allowed). Used to detect substitution templates:
-    groups that differ ONLY in replaced names/types are consistent by
-    construction and are suppressed."""
-    for name in sorted((n for n in names if n), key=len, reverse=True):
-        low_name, low_text = name.lower(), text.lower()
-        if low_name not in low_text:
-            continue
-        esc = re.escape(name)
-        text = re.sub(rf"(?<!\w){esc}(?:s|es)?(?!\w)", SLOT, text,
-                      flags=re.IGNORECASE)
-    return text
+def slot_structure(variants: list[str]) -> tuple[bool, int, list[Counter]]:
+    """Detect a substitution-template shape (pure substitution: all
+    variants have the same token count). A position is a substitution
+    SLOT when its tokens differ AND their skeletons differ — pure
+    case/punctuation differences ("Aww" vs. "Aww,", "??PICK" vs.
+    "??Pick") are NOT slots. Returns (ok, k, per-variant extra token
+    multisets) where k = number of slot positions. Works on
+    already-normalized strings."""
+    if len(variants) < 2:
+        return False, 0, []
+    lists = [v.split() for v in variants]
+    n = len(lists[0])
+    if any(len(tl) != n for tl in lists):
+        return False, 0, []
+
+    def tok_skel(t: str) -> str:
+        return NONWORD_RE.sub("", t.lower())
+
+    slot_positions = []
+    body_positions = 0
+    for pos in range(n):
+        toks = {tl[pos] for tl in lists}
+        if len(toks) > 1 and len({tok_skel(t) for t in toks}) > 1:
+            slot_positions.append(pos)
+        else:
+            body_positions += 1
+    if not slot_positions or body_positions == 0:
+        return False, 0, []
+    k = len(slot_positions)
+    if not 1 <= k <= 3:
+        return False, 0, []
+    extras = [Counter(tl[pos] for pos in slot_positions) for tl in lists]
+    return True, k, extras
+
+
+def name_like_token(tok: str, type_tok_re: re.Pattern) -> bool:
+    """Does an EN substitution slot look like a name or a type? Type
+    tokens count; otherwise a hyphen-free word starting with an uppercase
+    letter (proper noun) or a bounded color word. Lowercase content words
+    (forest/woods) and hyphenated terms (Z-Moves) do NOT count."""
+    if type_tok_re.fullmatch(tok):
+        return True
+    t = tok.strip(".,!?\"'()")
+    return bool(t) and "-" not in t and (t[0].isupper()
+                                         or t.lower() in COLOR_WORDS)
 
 
 # --------------------------------------------------------------------------
@@ -199,10 +248,10 @@ def _union_find_join(parent: dict, a: int, b: int) -> None:
 
 
 def build_groups(rows: list[dict], threshold: float, strict: bool,
-                 glossary: list[dict]) -> tuple[list[dict], int]:
+                 glossary: list[dict]) -> tuple[list[dict], list[dict]]:
     """rows: dicts with id/en/de/kategorie/ort + _index. Returns
     (groups sorted by DE variants desc, entries desc, first id asc;
-    number of suppressed substitution templates)."""
+    suppressed substitution templates as {ids, en, de, slots})."""
     # -- source groups by exact normalized EN
     by_en: dict[str, dict] = {}
     for r in rows:
@@ -225,6 +274,9 @@ def build_groups(rows: list[dict], threshold: float, strict: bool,
     for key in sorted(by_skel):
         parts = sorted(by_skel[key], key=lambda sg: sg["norm_en"])
         base = parts[0]
+        # keep ALL normalized variants (punctuation/case differ) for output
+        base["norm_variants"] = [sg["norm_en"] for sg in parts]
+        base["raw_variants"] = {sg["norm_en"]: sg["raw_en"] for sg in parts}
         for extra in parts[1:]:
             base["rows"].extend(extra["rows"])
             base["first_index"] = min(base["first_index"], extra["first_index"])
@@ -279,8 +331,10 @@ def build_groups(rows: list[dict], threshold: float, strict: bool,
             continue
         # DE variants ordered by (count desc, first seen asc) -> first = Majorität
         de_variants = sorted(variants.values(), key=lambda v: (-v[0], v[1]))
-        en_variants = sorted({sg["norm_en"] for sg in parts})
-        raw_en = {sg["norm_en"]: sg["raw_en"] for sg in parts}
+        en_variants = sorted({nv for sg in parts for nv in sg["norm_variants"]})
+        raw_en: dict[str, str] = {}
+        for sg in parts:
+            raw_en.update(sg["raw_variants"])
         sim_min = edge_min.get(root)
         groups.append({
             "en_variants": en_variants,
@@ -294,26 +348,64 @@ def build_groups(rows: list[dict], threshold: float, strict: bool,
     groups.sort(key=lambda g: (-len(g["de_variants"]), -len(g["rows"]),
                                sorted(r["id"] for r in g["rows"])[0]))
 
-    # -- substitution templates: groups differing ONLY in replaced
-    #    names/types are consistent by construction -> suppress
+    # -- substitution templates: groups whose EN variants differ ONLY in
+    #    name-like words (capitalized proper nouns / type tokens) and whose
+    #    DE variants differ correspondingly by the same number of slots are
+    #    consistent by construction (e.g. Mega-Stone text per Pokemon,
+    #    Z-Crystal text per type) -> suppress. Per-row guards keep real
+    #    errors visible: type tokens and glossary names must correspond on
+    #    both sides of every row (wrong/missing type or name -> keep).
     en_names = [e["en"] for e in glossary]
     de_names = [e["de"] for e in glossary]
-    type_slot_re = re.compile(rf"{PH_L}[Tt]:[A-Za-z0-9]+{PH_R}")
+    en2de: dict[str, set[str]] = defaultdict(set)
+    for e in glossary:
+        en2de.setdefault(e["en"].casefold(), set()).add(e["de"].casefold())
+    type_tok_re = TYPE_TOKEN_RE
 
-    def anon(text: str, names: list[str]) -> str:
-        return type_slot_re.sub(SLOT, slot_names(text, names))
+    def type_set(s: str) -> frozenset:
+        return frozenset(t.upper() for t in type_tok_re.findall(s))
 
     kept: list[dict] = []
-    suppressed = 0
+    suppressed: list[dict] = []
     for g in groups:
-        en_slots = {anon(e, en_names) for e in g["en_variants"]}
-        de_slots = {anon(de_key(v[2]), de_names) for v in g["de_variants"]}
-        if (len(en_slots) == 1 and len(de_slots) == 1
-                and SLOT in next(iter(en_slots))
-                and SLOT in next(iter(de_slots))):
-            suppressed += 1
-            continue
-        kept.append(g)
+        en_ok, k_en, en_extras = slot_structure(g["en_variants"])
+        de_ok, k_de, _ = slot_structure(
+            [de_key(v[2]) for v in g["de_variants"]])
+        is_template = (en_ok and de_ok and k_en == k_de
+                       and all(name_like_token(t, type_tok_re)
+                               for ex in en_extras for t in ex.elements()))
+        if is_template:
+            for r in g["rows"]:
+                e = norm_text(r["en"])
+                d = de_key(r["de"])
+                if type_set(e) != type_set(d):
+                    is_template = False
+                    break
+                # Type tokens are already consumed by the type check —
+                # blank them out so they cannot match glossary names
+                # (e.g. token <T:PSYCHIC> vs. trainer class "Psychic").
+                en_hit = [n for n in en_names
+                          if name_in_text(n, name_check_text(e))]
+                de_hit = [n for n in de_names
+                          if name_in_text(n, name_check_text(d))]
+                if en_hit:
+                    expected: set[str] = set()
+                    for n in en_hit:
+                        expected |= en2de.get(n.casefold(), set())
+                    if not any(n.casefold() in expected for n in de_hit):
+                        is_template = False
+                        break
+                elif de_hit:
+                    # DE contains a glossary name the EN lacks -> keep
+                    is_template = False
+                    break
+        if is_template:
+            suppressed.append({"ids": sorted(r["id"] for r in g["rows"]),
+                               "en": g["en_variants"][0],
+                               "de": g["de_variants"][0][2],
+                               "slots": k_en})
+        else:
+            kept.append(g)
     groups = kept
     for n, g in enumerate(groups, 1):
         g["gruppe"] = f"K{n:04d}"
@@ -351,9 +443,11 @@ def decide_group(g: dict, glossary: list[dict]) -> dict:
         for entry in glossary:
             if entry["de"].casefold() == entry["en"].casefold():
                 continue
-            if any(name_in_text(entry["en"], e) for e in g["en_variants"]):
+            if any(name_in_text(entry["en"], name_check_text(e))
+                   for e in g["en_variants"]):
                 containing = [v for v in g["de_variants"]
-                              if name_in_text(entry["de"], v[2])]
+                              if name_in_text(entry["de"],
+                                              name_check_text(v[2]))]
                 if containing:
                     glossary_hit = (entry,
                                     max(containing, key=lambda v: v[0]))
@@ -446,7 +540,7 @@ def main() -> int:
           f"{len(groups) - exact} nähere)", file=sys.stderr)
     print(f"→ davon {n_kontext} 'Kontext prüfen', {n_glossar} Glossar-Entscheid",
           file=sys.stderr)
-    print(f"→ {suppressed} Namen-/Typ-Vorlagen unterdrückt "
+    print(f"→ {len(suppressed)} Namen-/Typ-Vorlagen unterdrückt "
           f"(nur ersetzte Namen/Typen)", file=sys.stderr)
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -475,6 +569,7 @@ def main() -> int:
             "glossary_entries": len(glossary),
             "threshold": args.threshold,
             "strict": args.strict,
+            "suppressed_templates": suppressed,
             "groups": [
                 {"gruppe": g["gruppe"],
                  "ids": sorted(r["id"] for r in g["rows"]),
@@ -496,7 +591,7 @@ def main() -> int:
     add(f"> Zeilen: **{len(rows)}** · Gruppen: **{len(groups)}** "
         f"({exact} exakt, {len(groups) - exact} nähere) · "
         f"'Kontext prüfen': {n_kontext} · Glossar-Entscheid: {n_glossar} · "
-        f"unterdrückte Namen-/Typ-Vorlagen: {suppressed} · "
+        f"unterdrückte Namen-/Typ-Vorlagen: {len(suppressed)} · "
         f"Jaccard-Schwelle: {args.threshold} · strict: {args.strict}")
     add("")
     add("## Top-Gruppen (nach Varianten/Dichte)")
@@ -529,6 +624,13 @@ def main() -> int:
     add("- **Glossar-Regel**: kanonischer DE-Name aus dem "
         "Namensverzeichnis gewinnt vor der Majorität (offizielle "
         "Pokémon-Begriffe gehen immer vor)")
+    add("- **Ersatz-Vorlagen**: Gruppen mit gleicher Wortzahl, deren "
+        "unterschiedliche Wort-Positionen nur bei Skelett-Unterschied "
+        "(kein reiner Groesse-/Punktuation-Unterschied) und namenähnlichen "
+        "EN-Slots (Eigennamen, Typ-Tokens, Farben) liegen, werden "
+        "unterdrückt, wenn die DE-Fassungen mit gleicher Slot-Anzahl "
+        "differieren (pro Zeile müssen Typen und Glossar-Namen "
+        "korrespondieren; sonst bleibt die Gruppe stehen)")
     add("- Vorschlag (sonst): häufigste Fassung (Gleichstand: erste Vorkunft "
         "in Dateireihenfolge) — deterministisch, ohne Zufall und ohne LLM")
     add("")
@@ -542,7 +644,7 @@ def main() -> int:
     print(f"Zeilen: {len(rows)} | Gruppen: {len(groups)} "
           f"(exakt {exact}, nähere {len(groups) - exact}) | "
           f"Kontext: {n_kontext} | Glossar: {n_glossar} | "
-          f"Vorlagen unterdrückt: {suppressed}", file=sys.stderr)
+          f"Vorlagen unterdrückt: {len(suppressed)}", file=sys.stderr)
     return 0
 
 

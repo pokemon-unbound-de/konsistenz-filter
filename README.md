@@ -20,12 +20,24 @@ Werkstatt jede Konsistenz-Entscheidung **nur einmal** treffen.
 | Kampf-/Systemtexte: offizielles Gen-3-Wortlaut, Präsens | System-Gruppen (`ort=system_kampf`) erhalten eine Prüfhinweis-Notiz in der Begründung |
 | Zeilenumbrüche und Steuerzeichen (`\n`, `\p`, `[…]`) zählen nicht als Unterschied | werden in der Normalisierung zu Leerzeichen normalisiert |
 
-**Ersatz-Vorlagen (Namen/Typen):** Sätze, die sich nur durch ersetzte Namen
-(Glossar) oder Typen (Bug/Käfer, Flying/Flug, …) unterscheiden — z. B.
-Mega-Stein-Beschreibungen je Pokémon — sind übersetzungstechnisch
-konsistent und werden **unterdrückt** (werden im Report gezählt). Fehlt in
-der DE-Fassung der ersetzte Name oder weicht ab, bleibt die Gruppe stehen
-(Glossar-Regel).
+**Ersatz-Vorlagen (Namen/Typen):** Sätze, die sich nur durch ersetzte
+Namen oder Typen unterscheiden — z. B. Mega-Stein-Beschreibungen je
+Pokémon, Z-Kristalle je Typ — sind übersetzungstechnisch konsistent und
+werden **unterdrückt** (werden im Report gezählt). Erkennung strukturell
+(keine Namensliste nötig): alle EN-Varianten müssen gleich lang sein,
+und eine sich unterscheidende Wort-Position ist nur ein Slot, wenn auch
+deren Skelette (kleingeschrieben, ohne Satzzeichen) differieren — reine
+Groß-/Kleinschreibung- oder Punktuation-Unterschiede („Aww"/„Aww,")
+zählen nicht. EN-Slots müssen namenähnlich sein: Typ-Tokens (alle 18
+offiziellen Typen, inkl. Stahl/Unlicht/Fee), großgeschriebene Eigennamen
+oder Farben (begrenztes Wortset). Die DE-Fassungen müssen entsprechend
+mit gleicher Slot-Anzahl differieren. Pro Zeile müssen Typen und
+Glossar-Namen auf beiden Seiten korrespondieren — abweichender oder
+fehlender Name/Typ in der DE-Fassung lässt die Gruppe stehen. (Namens-
+Korrektheit deckt zusätzlich der automatische Terminologie-Check in der
+Pipeline ab.) Typ-Tokens werden vor dem Glossar-Namens-Match ausgeblendet
+(„Psychic" als Typ darf nicht den Trainerklassen-Namen „Psychic"
+treffen).
 
 ## Checks & Pipeline
 
@@ -90,6 +102,14 @@ Kontext-Regel. Baseline: `--strict` (nur Exakt-Gruppen, höchste Präzision).
 
 ## Versionen
 
+- **v0.4** — strukturelle Ersatz-Vorlagen-Erkennung ohne Namensliste
+  (das Namensverzeichnis enthält keine Pokémon-Namen, nur Figuren/
+  Trainer/Items): positionsbasiert (gleiche Wortzahl, Slot nur bei
+  Skelett-Unterschied — Groß-/Kleinschreibung und Punktuation zählen
+  nicht), 18 offizielle Typen (inkl. Stahl/Unlicht/Fee), Farben als
+  begrenztes Slot-Wortset, Typ-Tokens beim Glossar-Namens-Match
+  ausgeblendet; EN-Varianten mit Punktationsdifferenz werden komplett
+  gelistet
 - **v0.3** — Ersatz-Vorlagen-Regel: Gruppen, die nur in ersetzten
   Glossar-Namen/Typen differieren, werden unterdrückt (Reduktion der
   Fehlgruppen bei Item-Beschreibungen je Pokémon/Typ)
