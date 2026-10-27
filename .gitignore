@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+out/
+ergebnis.csv
+konsistenz_results.json
+*.csv
