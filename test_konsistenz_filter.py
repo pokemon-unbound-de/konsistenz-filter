@@ -216,6 +216,50 @@ class KonsistenzFilterTests(unittest.TestCase):
         self.assertEqual(len(data["groups"]), 1)
         self.assertIn("vorschlag", data["groups"][0])
 
+    def test_name_substitution_template_is_suppressed(self):
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "Have the Blubio hold this stone and it will enable it to Mega Evolve during battle.",
+             "Trägt der Blubbio diesen Stein, kann er die Mega-Entwicklung vollziehen.",
+             "gap_item_desc", ""),
+            ("0x0002",
+             "Have the Glubio hold this stone and it will enable it to Mega Evolve during battle.",
+             "Trägt der Glubbio diesen Stein, kann er die Mega-Entwicklung vollziehen.",
+             "gap_item_desc", ""),
+        ])
+        make_glossary(self.gloss_path, [("Blubbio", "Blubio"),
+                                        ("Glubbio", "Glubio")])
+        patched_argv(["--csv", self.csv_path, "--glossary", self.gloss_path,
+                      "--out-dir", self.out_dir])
+        self.assertEqual(self.load_results(), [])
+
+    def test_type_substitution_template_is_suppressed(self):
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "This is a crystallized form of Z-Power. It upgrades Bug-type moves to Z-Moves.",
+             "Eine kristallisierte Form der Z-Kraft. Sie wandelt Attacken vom Typ Käfer in Z-Moves.",
+             "gap_item_desc", ""),
+            ("0x0002",
+             "This is a crystallized form of Z-Power. It upgrades Flying-type moves to Z-Moves.",
+             "Eine kristallisierte Form der Z-Kraft. Sie wandelt Attacken vom Typ Flug in Z-Moves.",
+             "gap_item_desc", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        self.assertEqual(self.load_results(), [])
+
+    def test_same_en_with_name_swap_kept_and_glossary_decides(self):
+        make_csv(self.csv_path, [
+            ("0x0001", "The Blubio is here!", "Hier ist der Blubbio!", "scripts", ""),
+            ("0x0002", "The Blubio is here!", "Hier ist das Blubio!", "scripts", ""),
+        ])
+        make_glossary(self.gloss_path, [("Blubbio", "Blubio")])
+        patched_argv(["--csv", self.csv_path, "--glossary", self.gloss_path,
+                      "--out-dir", self.out_dir])
+        rows = self.load_results()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["vorschlag"], "Hier ist der Blubbio!")
+        self.assertIn("Glossar", rows[0]["grund"])
+
     def test_run_is_deterministic(self):
         make_csv(self.csv_path, [
             ("0x0001", "We have walked a very long road through the forest to find this place.",

@@ -59,11 +59,20 @@ BUFFER_RE = re.compile(r"\[?#?FD([0-9A-Fa-f]{2})\]")
 NONWORD_RE = re.compile(r"[^a-z0-9]+")
 FORMAL_SIE_RE = re.compile(r"\bSie\b")
 PH_L, PH_R = "\u27e8", "\u27e9"
+SLOT = f"{PH_L}SLOT{PH_R}"
 QUOTES = {
     "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
     "\u2013": "-", "\u2014": "-", "\u2026": "...",
 }
 
+# Pokemon types (Gen 3): EN word -> canonical token / DE word
+TYPE_PAIRS = [
+    ("Normal", "Normal"), ("Fire", "Feuer"), ("Water", "Wasser"),
+    ("Electric", "Elektro"), ("Grass", "Grass"), ("Ice", "Eis"),
+    ("Fighting", "Kampf"), ("Poison", "Gift"), ("Ground", "Boden"),
+    ("Flying", "Flug"), ("Psycho", "Psycho"), ("Bug", "Käfer"),
+    ("Rock", "Gestein"), ("Ghost", "Geist"), ("Dragon", "Drache"),
+]
 KONTEXT = "Kontext prüfen"
 
 
@@ -74,8 +83,9 @@ KONTEXT = "Kontext prüfen"
 def norm_text(s: str) -> str:
     """Normalize for source comparison: control codes and color codes are
     layout (-> space), buffer placeholders are canonicalized to the same
-    token in both languages ([FD02] == [#FD02]), Unicode and whitespace
-    unified. Case and terminal punctuation are kept."""
+    token in both languages ([FD02] == [#FD02]), type words are
+    canonicalized (Bug-type == Käfer-), Unicode and whitespace unified.
+    Case and terminal punctuation are kept."""
     if not s:
         return ""
     s = unicodedata.normalize("NFKC", s)
@@ -85,6 +95,15 @@ def norm_text(s: str) -> str:
     s = CTRL_RE.sub(" ", s)
     s = COLOR_RE.sub(" ", s)
     s = BUFFER_RE.sub(lambda m: f"{PH_L}FD{m.group(1).upper()}{PH_R}", s)
+    for en, de in TYPE_PAIRS:
+        token = f"{PH_L}T:{en.upper()}{PH_R}"
+        # EN: hyphenated "Bug-type" (any case) or capitalized "Bug"
+        s = re.sub(rf"(?<!\w){en}-type(?!\w)", token, s, flags=re.IGNORECASE)
+        s = re.sub(rf"(?<!\w){en.capitalize()}(?!\w)", token, s)
+        # DE: compound "Käfer-Attacken" or after "Typ " ("Typ Käfer")
+        s = re.sub(rf"(?<!\w){de}(?=-\w)", token, s, flags=re.IGNORECASE)
+        s = re.sub(rf"(?<!\w)Typ {de}(?!\w)", "Typ " + token, s,
+                   flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -152,6 +171,21 @@ def name_in_text(name: str, text: str) -> bool:
     return re.search(rf"(?<!\w){esc}(?:s|es)?(?!\w)", text, re.IGNORECASE) is not None
 
 
+def slot_names(text: str, names: list[str]) -> str:
+    """Anonymize glossary names to an anonymous slot token (longest first,
+    inflection suffixes allowed). Used to detect substitution templates:
+    groups that differ ONLY in replaced names/types are consistent by
+    construction and are suppressed."""
+    for name in sorted((n for n in names if n), key=len, reverse=True):
+        low_name, low_text = name.lower(), text.lower()
+        if low_name not in low_text:
+            continue
+        esc = re.escape(name)
+        text = re.sub(rf"(?<!\w){esc}(?:s|es)?(?!\w)", SLOT, text,
+                      flags=re.IGNORECASE)
+    return text
+
+
 # --------------------------------------------------------------------------
 # Grouping
 # --------------------------------------------------------------------------
@@ -164,9 +198,11 @@ def _union_find_join(parent: dict, a: int, b: int) -> None:
         parent[rb] = ra
 
 
-def build_groups(rows: list[dict], threshold: float, strict: bool) -> list[dict]:
-    """rows: dicts with id/en/de/kategorie/ort + _index. Returns final
-    groups sorted by (DE variants desc, entries desc, first id asc)."""
+def build_groups(rows: list[dict], threshold: float, strict: bool,
+                 glossary: list[dict]) -> tuple[list[dict], int]:
+    """rows: dicts with id/en/de/kategorie/ort + _index. Returns
+    (groups sorted by DE variants desc, entries desc, first id asc;
+    number of suppressed substitution templates)."""
     # -- source groups by exact normalized EN
     by_en: dict[str, dict] = {}
     for r in rows:
@@ -257,9 +293,31 @@ def build_groups(rows: list[dict], threshold: float, strict: bool) -> list[dict]
 
     groups.sort(key=lambda g: (-len(g["de_variants"]), -len(g["rows"]),
                                sorted(r["id"] for r in g["rows"])[0]))
+
+    # -- substitution templates: groups differing ONLY in replaced
+    #    names/types are consistent by construction -> suppress
+    en_names = [e["en"] for e in glossary]
+    de_names = [e["de"] for e in glossary]
+    type_slot_re = re.compile(rf"{PH_L}[Tt]:[A-Za-z0-9]+{PH_R}")
+
+    def anon(text: str, names: list[str]) -> str:
+        return type_slot_re.sub(SLOT, slot_names(text, names))
+
+    kept: list[dict] = []
+    suppressed = 0
+    for g in groups:
+        en_slots = {anon(e, en_names) for e in g["en_variants"]}
+        de_slots = {anon(de_key(v[2]), de_names) for v in g["de_variants"]}
+        if (len(en_slots) == 1 and len(de_slots) == 1
+                and SLOT in next(iter(en_slots))
+                and SLOT in next(iter(de_slots))):
+            suppressed += 1
+            continue
+        kept.append(g)
+    groups = kept
     for n, g in enumerate(groups, 1):
         g["gruppe"] = f"K{n:04d}"
-    return groups
+    return groups, suppressed
 
 
 # --------------------------------------------------------------------------
@@ -378,7 +436,8 @@ def main() -> int:
         print(f"⚠ Glossar nicht lesbar: {args.glossary}", file=sys.stderr)
     print(f"→ {len(glossary)} Glossar-Einträge", file=sys.stderr)
 
-    groups = build_groups(rows, threshold=args.threshold, strict=args.strict)
+    groups, suppressed = build_groups(rows, threshold=args.threshold,
+                                      strict=args.strict, glossary=glossary)
     decisions = {g["gruppe"]: decide_group(g, glossary) for g in groups}
     n_kontext = sum(1 for v in decisions.values() if v["mode"] == "kontext")
     n_glossar = sum(1 for v in decisions.values() if v["basis"] == "glossar")
@@ -387,6 +446,8 @@ def main() -> int:
           f"{len(groups) - exact} nähere)", file=sys.stderr)
     print(f"→ davon {n_kontext} 'Kontext prüfen', {n_glossar} Glossar-Entscheid",
           file=sys.stderr)
+    print(f"→ {suppressed} Namen-/Typ-Vorlagen unterdrückt "
+          f"(nur ersetzte Namen/Typen)", file=sys.stderr)
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -435,6 +496,7 @@ def main() -> int:
     add(f"> Zeilen: **{len(rows)}** · Gruppen: **{len(groups)}** "
         f"({exact} exakt, {len(groups) - exact} nähere) · "
         f"'Kontext prüfen': {n_kontext} · Glossar-Entscheid: {n_glossar} · "
+        f"unterdrückte Namen-/Typ-Vorlagen: {suppressed} · "
         f"Jaccard-Schwelle: {args.threshold} · strict: {args.strict}")
     add("")
     add("## Top-Gruppen (nach Varianten/Dichte)")
@@ -479,7 +541,8 @@ def main() -> int:
     print(f"\n=== ZUSAMMENFASSUNG ===", file=sys.stderr)
     print(f"Zeilen: {len(rows)} | Gruppen: {len(groups)} "
           f"(exakt {exact}, nähere {len(groups) - exact}) | "
-          f"Kontext: {n_kontext} | Glossar: {n_glossar}", file=sys.stderr)
+          f"Kontext: {n_kontext} | Glossar: {n_glossar} | "
+          f"Vorlagen unterdrückt: {suppressed}", file=sys.stderr)
     return 0
 
 

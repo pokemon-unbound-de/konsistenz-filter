@@ -20,6 +20,13 @@ Werkstatt jede Konsistenz-Entscheidung **nur einmal** treffen.
 | Kampf-/Systemtexte: offizielles Gen-3-Wortlaut, Präsens | System-Gruppen (`ort=system_kampf`) erhalten eine Prüfhinweis-Notiz in der Begründung |
 | Zeilenumbrüche und Steuerzeichen (`\n`, `\p`, `[…]`) zählen nicht als Unterschied | werden in der Normalisierung zu Leerzeichen normalisiert |
 
+**Ersatz-Vorlagen (Namen/Typen):** Sätze, die sich nur durch ersetzte Namen
+(Glossar) oder Typen (Bug/Käfer, Flying/Flug, …) unterscheiden — z. B.
+Mega-Stein-Beschreibungen je Pokémon — sind übersetzungstechnisch
+konsistent und werden **unterdrückt** (werden im Report gezählt). Fehlt in
+der DE-Fassung der ersetzte Name oder weicht ab, bleibt die Gruppe stehen
+(Glossar-Regel).
+
 ## Checks & Pipeline
 
 1. **Normalisierung**: Steuerzeichen/Umbrüche → Leerzeichen, Farbcodes
@@ -83,6 +90,9 @@ Kontext-Regel. Baseline: `--strict` (nur Exakt-Gruppen, höchste Präzision).
 
 ## Versionen
 
+- **v0.3** — Ersatz-Vorlagen-Regel: Gruppen, die nur in ersetzten
+  Glossar-Namen/Typen differieren, werden unterdrückt (Reduktion der
+  Fehlgruppen bei Item-Beschreibungen je Pokémon/Typ)
 - **v0.2** — Werkstatt-Regeln: Glossar-Prinzip, Kontext-Modus
   (Orte/Kategorien/Register), Gen-3-Systemhinweis
 - **v0.1** — Normalisierung, Exakt-/Nahe-Gruppen, Majoritäts-Vorschlag
