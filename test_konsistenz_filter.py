@@ -473,5 +473,273 @@ class KonsistenzFilterTests(unittest.TestCase):
         self.assertEqual(a, b)
 
 
+def make_kanon(path, rows):
+    """rows: (typ, en, de, quelle) — Kanon-Namensliste-Format"""
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh, delimiter=";")
+        w.writerow(["typ", "en", "de", "quelle"])
+        for row in rows:
+            w.writerow(row)
+
+
+# Synthetische Kanon-Fixture (keine echten Spieltexte):
+#   Mew = EN==DE (darf nie ein Befund sein)
+#   10,000,000 Volt Thunderbolt = Kommas (CSV-Quoting + Regex)
+#   Let's Snuggle Forever = Apostroph (Regex-Sonderzeichen)
+#   G-Max Vine Lash → Giga-Geißel = Umlaut/ß + Bindestrich
+KANON_FIXTURE = [
+    ("pokémon", "Mew", "Mew", "https://example.org/mew"),
+    ("pokémon", "Charizard", "Glurak", "https://example.org/glurak"),
+    ("attacke", "10,000,000 Volt Thunderbolt",
+     "Tausendfacher Donnerblitz", "https://example.org/donnerblitz"),
+    ("attacke", "Let's Snuggle Forever", "Herzliche Knuddelkloppe",
+     "https://example.org/knuddelkloppe"),
+    ("attacke", "G-Max Vine Lash", "Giga-Geißel",
+     "https://example.org/geissel"),
+]
+
+
+class KanonCheckTests(unittest.TestCase):
+    """v0.5: --kanon prüft offizielle EN-Namen im DE-Text und umgekehrt."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=HERE)
+        self.addCleanup(self.temp.cleanup)
+        self.csv_path = os.path.join(self.temp.name, "texte.csv")
+        self.kanon_path = os.path.join(self.temp.name, "kanon.csv")
+        self.out_dir = os.path.join(self.temp.name, "out")
+
+    def run_with_kanon(self, extra=None):
+        args = ["--csv", self.csv_path, "--kanon", self.kanon_path,
+                "--out-dir", self.out_dir]
+        if extra:
+            args += extra
+        return patched_argv(args)
+
+    def read_kanon(self):
+        with open(os.path.join(self.out_dir, "kanon_check.csv"),
+                  encoding="utf-8", newline="") as fh:
+            return list(csv.DictReader(fh, delimiter=";"))
+
+    def read_json(self):
+        with open(os.path.join(self.out_dir, "konsistenz_results.json"),
+                  encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_en_name_in_de_text_is_a_finding(self):
+        make_csv(self.csv_path, [
+            ("0x0001", "Charizard uses Flamethrower!",
+             "Charizard setzt Flamethrower ein!", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        rows = self.read_kanon()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "0x0001")
+        self.assertEqual(rows[0]["richtung"], "en_name_in_de")
+        self.assertEqual(rows[0]["name"], "Charizard")
+        self.assertEqual(rows[0]["erwartet"], "Glurak")
+        self.assertEqual(rows[0]["typ"], "pokémon")
+        self.assertEqual(rows[0]["quelle"], "https://example.org/glurak")
+
+    def test_de_name_present_suppresses_en_finding(self):
+        # Offizielles EN-Namen im DE-Text, ABER das offizielle
+        # DE-Namen ist auch da -> kein Befund (Präzision vor Recall)
+        make_csv(self.csv_path, [
+            ("0x0001", "Charizard is here!",
+             "Charizard und Glurak sind hier!", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        self.assertEqual(self.read_kanon(), [])
+
+    def test_de_name_alone_is_not_a_finding(self):
+        # DE-Fassung enthält nur den offiziellen DE-Namen -> korrekt
+        make_csv(self.csv_path, [
+            ("0x0001", "Charizard is here!", "Glurak ist hier!",
+             "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        self.assertEqual(self.read_kanon(), [])
+
+    def test_de_name_in_en_text_is_a_finding(self):
+        # Offizielles DE-Namen in der EN-Quelle -> Kontaminierung.
+        # DE-Text enthält bewusst KEINEN Kanon-Namen, damit genau der
+        # de_name_in_en-Befund entsteht.
+        make_csv(self.csv_path, [
+            ("0x0001", "Glurak is here!", "Der Drache ist hier!",
+             "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        rows = self.read_kanon()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["richtung"], "de_name_in_en")
+        self.assertEqual(rows[0]["name"], "Glurak")
+        self.assertEqual(rows[0]["erwartet"], "Charizard")
+
+    def test_identical_names_in_both_languages_never_a_finding(self):
+        # Mew == Mew in EN und DE: Name in beiden Fassungen ist korrekt
+        make_csv(self.csv_path, [
+            ("0x0001", "Mew is here!", "Mew ist hier!", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        self.assertEqual(self.read_kanon(), [])
+
+    def test_word_boundary_and_case_sensitive_matching(self):
+        # Mews (Plural), Mewtu (anderes Pokémon) und kleingeschriebenes
+        # 'mew' dürfen NICHT mit dem Kanon-Namen 'Mew' matchen
+        make_csv(self.csv_path, [
+            ("0x0001", "The Mews play.", "Die Mews spielen.", "scripts", ""),
+            ("0x0002", "Mewtwo waits.", "Mewtu wartet dort.", "scripts", ""),
+            ("0x0003", "Mew is here!", "mew ist hier!", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        self.assertEqual(self.read_kanon(), [])
+
+    def test_names_inside_longer_words_do_not_match(self):
+        # 'Charizardite' enthält 'Charizard', aber Wortgrenz-Check:
+        # nach 'Charizard' folgt 'i' -> kein Match
+        make_csv(self.csv_path, [
+            ("0x0001", "Use the Charizardite X.",
+             "Verwende das Gluraknit X.", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        self.assertEqual(self.read_kanon(), [])
+
+    def test_special_characters_comma_and_apostrophe(self):
+        # '10,000,000 Volt Thunderbolt' (Kommas) und 'Let's Snuggle
+        # Forever' (Apostroph): Regex-Escape + CSV-Quoting müssen halten
+        make_csv(self.csv_path, [
+            ("0x0001", "It learns 10,000,000 Volt Thunderbolt.",
+             "Es lernt 10,000,000 Volt Thunderbolt.", "scripts", ""),
+            ("0x0002", "Let's Snuggle Forever!",
+             "Herzliche Knuddelkloppe!", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        rows = self.read_kanon()
+        # Zeile 1: EN-Name im DE-Text ohne DE-Name -> Befund
+        # Zeile 2: korrekte DE-Übersetzung -> kein Befund
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "0x0001")
+        self.assertEqual(rows[0]["name"], "10,000,000 Volt Thunderbolt")
+        self.assertEqual(rows[0]["erwartet"], "Tausendfacher Donnerblitz")
+
+    def test_umlaut_and_hyphen_name(self):
+        # 'Giga-Geißel' (ß + Bindestrich) muss exakt matchen
+        make_csv(self.csv_path, [
+            ("0x0001", "It uses G-Max Vine Lash!",
+             "Es nutzt die Giga-Geißel!", "scripts", ""),
+            ("0x0002", "It uses G-Max Vine Lash!",
+             "Es nutzt G-Max Vine Lash!", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        rows = self.read_kanon()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "0x0002")
+        self.assertEqual(rows[0]["name"], "G-Max Vine Lash")
+        self.assertEqual(rows[0]["erwartet"], "Giga-Geißel")
+
+    def test_kanon_csv_format_and_json_section(self):
+        # Zeile 1: EN-Name 'Charizard' im DE-Text -> en_name_in_de
+        # Zeile 2: DE-Name 'Glurak' in der EN-Quelle -> de_name_in_en
+        make_csv(self.csv_path, [
+            ("0x0001", "Charizard is here!", "Charizard ist hier!",
+             "scripts", ""),
+            ("0x0002", "Glurak waits.", "Glurak wartet.", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        with open(os.path.join(self.out_dir, "kanon_check.csv"),
+                  encoding="utf-8", newline="") as fh:
+            header = next(csv.reader(fh, delimiter=";"))
+        self.assertEqual(header, ["id", "en", "de", "richtung", "name",
+                                  "erwartet", "typ", "quelle"])
+        data = self.read_json()
+        self.assertEqual(data["kanon"]["names"], len(KANON_FIXTURE))
+        self.assertEqual(data["kanon"]["findings"], 2)
+        self.assertEqual(data["kanon"]["rows_affected"], 2)
+        self.assertEqual(data["kanon"]["by_direction"],
+                         {"en_name_in_de": 1, "de_name_in_en": 1})
+        report = open(os.path.join(self.out_dir, "konsistenz_report.md"),
+                      encoding="utf-8").read()
+        self.assertIn("## Kanon-Check", report)
+
+    def test_untranslated_rows_are_not_kanon_findings(self):
+        # EN == DE (oder nur Formatierungs-/Farbcod-Unterschiede) ->
+        # Zeile effektiv nicht übersetzt (z. B. Marken-Platzhalter
+        # "Smogon Gen 7 OU" = Website-Name, nicht das Pokémon) ->
+        # "Name in falscher Sprache" ist dort nicht definiert
+        make_csv(self.csv_path, [
+            ("0x0001", "Glurak Gen 7 OU", "Glurak Gen 7 OU", "scripts", ""),
+            ("0x0002", "[#FC0106]Charizard", "Charizard", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        self.run_with_kanon()
+        self.assertEqual(self.read_kanon(), [])
+
+    def test_default_run_without_kanon(self):
+        # Default-Verhalten unverändert: ohne --kanon kein kanon_check.csv
+        make_csv(self.csv_path, [
+            ("0x0001", "Charizard is here!", "Charizard ist hier!",
+             "scripts", ""),
+        ])
+        out2 = os.path.join(self.temp.name, "out2")
+        patched_argv(["--csv", self.csv_path, "--out-dir", out2])
+        self.assertFalse(os.path.exists(
+            os.path.join(out2, "kanon_check.csv")))
+        with open(os.path.join(out2, "konsistenz_results.json"),
+                  encoding="utf-8") as fh:
+            data = json.load(fh)
+        self.assertIsNone(data["kanon"])
+
+    def test_kanon_is_deterministic(self):
+        make_csv(self.csv_path, [
+            ("0x0001", "Charizard is here!", "Charizard ist hier!",
+             "scripts", ""),
+            ("0x0002", "Charizard and Mew battle!",
+             "Charizard und Mew kämpfen!", "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, KANON_FIXTURE)
+        out_a = os.path.join(self.temp.name, "out_a")
+        out_b = os.path.join(self.temp.name, "out_b")
+        patched_argv(["--csv", self.csv_path, "--kanon", self.kanon_path,
+                      "--out-dir", out_a])
+        patched_argv(["--csv", self.csv_path, "--kanon", self.kanon_path,
+                      "--out-dir", out_b])
+        a = Path(out_a, "kanon_check.csv").read_text(encoding="utf-8")
+        b = Path(out_b, "kanon_check.csv").read_text(encoding="utf-8")
+        self.assertEqual(a, b)
+
+    def test_empty_kanon_file_warns_but_runs(self):
+        make_csv(self.csv_path, [
+            ("0x0001", "Charizard is here!", "Charizard ist hier!",
+             "scripts", ""),
+        ])
+        make_kanon(self.kanon_path, [])  # nur Header
+        # bewusst NICHT via patched_argv/run_tool: deren interner
+        # redirect_stderr würde die Warnung verschlucken
+        old = sys.argv
+        sys.argv = ["konsistenz_filter.py", "--csv", self.csv_path,
+                    "--kanon", self.kanon_path, "--out-dir", self.out_dir]
+        err = io.StringIO()
+        try:
+            with redirect_stderr(err):
+                rc = kf.main()
+        finally:
+            sys.argv = old
+        self.assertEqual(rc, 0)
+        self.assertIn("⚠", err.getvalue())
+        rows = self.read_kanon()
+        self.assertEqual(rows, [])
+        self.assertEqual(self.read_json()["kanon"]["names"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

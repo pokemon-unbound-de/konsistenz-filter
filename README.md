@@ -77,6 +77,7 @@ python3 konsistenz_filter.py \
 | `--strict` | nur exakt identische EN-Quellen (konservatives Baseline) |
 | `--top` | Topliste-Größe im Report (Default 20) |
 | `--werkstatt` | zusätzliches `werkstatt_einheitlichkeit.csv` im Dialogwerkstatt-Einleseformat |
+| `--kanon` | Kanon-Namensliste-CSV (`typ;en;de;quelle`, z. B. aus dem Repo `kanon-namensliste`): zusätzlich `kanon_check.csv` — prüft pro Zeile, ob in der **DE-Fassung ein offizielles EN-Namen** vorkommt (Fehlübersetzung) oder in der **EN-Quelle ein offizielles DE-Namen** (Kontaminierung) |
 
 ### Ausgabe
 
@@ -90,13 +91,31 @@ python3 konsistenz_filter.py \
   Werkstatt. **Enthält Textinhalte** — privat ablegen.
 - `konsistenz_report.md` — **nur Aggregat** (keine Textinhalte, öffentlich sicher)
 - `konsistenz_results.json` — maschinenlesbar, **enthält Textinhalte**
+- `kanon_check.csv` (nur mit `--kanon`) — `id;en;de;richtung;name;erwartet;typ;quelle`
+  (`richtung` = `en_name_in_de` / `de_name_in_en`). Semantik: Befund nur, wenn
+  das offizielle EN-Namen in der DE-Fassung vorkommt **und** das zugehörige
+  offizielle DE-Namen dort **nicht** — und umgekehrt. Wortgrenzen und
+  Groß-/Kleinschreibung werden beachtet (keine Teilwort-Treffer wie
+  „Mews" oder „mew"); identische Namen in EN und DE (z. B. Mew) sind nie
+  ein Befund; Zeilen, die selbst (nach Normalisierung) nicht übersetzt
+  sind, bleiben außen vor — „Name in falscher Sprache" ist dort nicht
+  definiert (z. B. Marken-Platzhalter wie „Smogon Gen 7 OU" = Website).
+  **Enthält Textinhalte** — privat ablegen.
+- **Bekannte Limitation (Vorfilter-Charakter)**: Der Kanon-Check ist
+  kontext-blind (Namens-Matching ohne Semantik). Deutsche Wörter, die
+  offiziellen EN-Namen entsprechen („Rest", „Pass", „Mist", „Tee",
+  „Klang", „Charge"), Marken- und Fachbegriffe („Flash 128k") und
+  Namenskollisionen („Blitz" in „Breakneck Blitz") erzeugen
+  False-Positives. Absicht: günstige Kandidaten-Liste für die
+  Werkstatt-Prüfung (Präzision vor Recall — aber Menschen entscheiden).
 
 ## Sicherheit & Datenhaltung
 
 - **Lese-only** — Eingabe wird nicht geändert.
 - **Keine Spieltexte in öffentlichen Repos** — Code, Tests (synthetische
   Fixtures), Report-Aggregat und Doku sind public-safe; `ergebnis.csv`,
-  `werkstatt_einheitlichkeit.csv` und `konsistenz_results.json` bleiben privat.
+  `werkstatt_einheitlichkeit.csv`, `konsistenz_results.json` und
+  `kanon_check.csv` bleiben privat.
 - **Reproduzierbar**: gleicher Input + gleiche Parameter → gleicher Output
   (deterministisch, sortierte Verarbeitung, keine LLM).
 
@@ -108,6 +127,17 @@ Kontext-Regel. Baseline: `--strict` (nur Exakt-Gruppen, höchste Präzision).
 
 ## Versionen
 
+- **v0.5** — Kanon-Check (`--kanon`): offizielle EN/DE-Namen (aus der
+  [Kanon-Namensliste](https://github.com/pokemon-unbound-de/kanon-namensliste),
+  Gen 1–9 + aktuelle Zusätze) werden pro Zeile in beide Richtungen geprüft —
+  offizielles EN-Namen im DE-Text (Fehlübersetzung) bzw. offizielles
+  DE-Namen in der EN-Quelle (Kontaminierung) → `kanon_check.csv`.
+  Präzisionsregeln: Wortgrenzen, Groß-/Kleinschreibung-treu, kein Befund
+  wenn das zugehörige offizielle Namenspaar in derselben Fassung steht,
+  der Name in EN/DE identisch ist, oder die Zeile selbst nach
+  Normalisierung nicht übersetzt ist (EN == DE, z. B. Marken-
+  Platzhalter). Additive Option — Default-Lauf (ohne `--kanon`) bleibt
+  unverändert
 - **v0.4.1** — Werkstatt-Format: zusätzliches `werkstatt_einheitlichkeit.csv`
   (`--werkstatt`) im Dialogwerkstatt-Einleseformat
   `gruppe;ids;en;de_varianten;vorschlag;grund;kategorie;ort;status`

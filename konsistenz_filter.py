@@ -500,6 +500,113 @@ def distinct_values(rows: list[dict], key: str) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Kanon-Namensliste (offizielle EN/DE-Namen; --kanon)
+# --------------------------------------------------------------------------
+# Prüft pro Korpus-Zeile, ob in der DE-Fassung ein offizielles EN-Namen
+# vorkommt (Fehlübersetzung) oder in der EN-Quelle ein offizielles
+# DE-Namen (Kontaminierung). Treffer nur mit Wortgrenzen und
+# Groß-/Kleinschreibung-treu; es gilt: kein Befund, wenn der zugehörige
+# offizielle Name in derselben Fassung vorkommt (Präzision vor Recall).
+
+def load_kanon(path: str) -> tuple[dict, dict, int]:
+    """Kanon-CSV (typ;en;de;quelle) -> Match-Indizes.
+
+    Rückgabe: (en_index, de_index, anzahl). Jeder Index bündelt Namen nach
+    den ersten min(4, Länge) Zeichen (Groß-Kleinschreibung-treu); der
+    Vollmatch folgt per Regex mit Wortgrenzen.
+    """
+    en_index: dict[str, list] = {}
+    de_index: dict[str, list] = {}
+    count = 0
+    with open(path, encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh, delimiter=";"):
+            typ = (row.get("typ") or "").strip()
+            en = (row.get("en") or "").strip()
+            de = (row.get("de") or "").strip()
+            quelle = (row.get("quelle") or "").strip()
+            if not typ or not en or not de:
+                continue
+            count += 1
+            en_re = re.compile(rf"(?<![A-Za-z0-9]){re.escape(en)}(?![A-Za-z0-9])")
+            de_re = re.compile(rf"(?<![A-Za-z0-9]){re.escape(de)}(?![A-Za-z0-9])")
+            en_index.setdefault(en[:4], []).append(
+                (en, de, typ, quelle, en_re))
+            de_index.setdefault(de[:4], []).append(
+                (de, en, typ, quelle, de_re))
+    return en_index, de_index, count
+
+
+def _prefixes_present(text: str) -> set:
+    """Alle 2–4er-Teilstücke des Textes (Groß-Kleinschreibung-treu) als
+    Set — Präfilter, damit nur Namen geprüft werden, deren Anfang im
+    Text vorkommt."""
+    out: set[str] = set()
+    for n in (2, 3, 4):
+        if len(text) >= n:
+            out.update(text[i:i + n] for i in range(len(text) - n + 1))
+    return out
+
+
+def _names_in_text(text: str, prefixes: set, index: dict) -> list:
+    """Namens-Treffer im Text (Präfilter: Namens-Präfix im Text;
+    danach Vollmatch mit Wortgrenzen)."""
+    hits = []
+    for key, bucket in index.items():
+        if key not in prefixes:
+            continue
+        for name, expected, typ, quelle, rx in bucket:
+            if rx.search(text):
+                hits.append((name, expected, typ, quelle))
+    return hits
+
+
+def kanon_check_rows(rows: list[dict], kanon: tuple) -> list[dict]:
+    """Pro Zeile: offizielles EN-Namen im DE-Text (und umgekehrt).
+    Nur wenn das zugehörige offizielle Namens-Entsprechende NICHT in
+    derselben Fassung vorkommt und EN != DE (gleiche Namen in beiden
+    Sprachen sind kein Befund). Zeilen, deren EN und DE nach
+    Normalisierung identisch sind (nicht übersetzte Zeilen, z. B.
+    Marken-Platzhalter), bleiben außen vor: "Name in falscher
+    Sprache" ist dort nicht definiert (nicht übersetzte Zeilen sind
+    ein eigener Check)."""
+    en_index, de_index, _ = kanon
+    findings: list[dict] = []
+    for r in rows:
+        de_text = r["de"]
+        en_text = r["en"]
+        de_hits = _names_in_text(de_text, _prefixes_present(de_text),
+                                 en_index)
+        en_hits = _names_in_text(en_text, _prefixes_present(en_text),
+                                 de_index)
+        if not de_hits and not en_hits:
+            continue
+        if en_text == de_text or skeleton(en_text) == skeleton(de_text):
+            continue  # effektiv nicht übersetzte Zeile (nur
+                       # Formatierungs-/Farbcode-Unterschiede)
+        for name, expected, typ, quelle in de_hits:
+            if name.casefold() == expected.casefold():
+                continue
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(expected)}"
+                         r"(?![A-Za-z0-9])", de_text):
+                continue  # offizielles DE-Namen ist auch da -> kein Befund
+            findings.append({"id": r["id"], "en": r["en"], "de": r["de"],
+                             "richtung": "en_name_in_de",
+                             "name": name, "erwartet": expected,
+                             "typ": typ, "quelle": quelle})
+        for name, expected, typ, quelle in en_hits:
+            if name.casefold() == expected.casefold():
+                continue
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(expected)}"
+                         r"(?![A-Za-z0-9])", en_text):
+                continue
+            findings.append({"id": r["id"], "en": r["en"], "de": r["de"],
+                             "richtung": "de_name_in_en",
+                             "name": name, "erwartet": expected,
+                             "typ": typ, "quelle": quelle})
+    return findings
+
+
+# --------------------------------------------------------------------------
 # Output
 # --------------------------------------------------------------------------
 
@@ -520,6 +627,12 @@ def main() -> int:
                    help="zusätzliches Werkstatt-CSV im Dialogwerkstatt-"
                         "Einleseformat (gruppe;ids;en;de_varianten;vorschlag;"
                         "grund;kategorie;ort;status); ENTHÄLT TEXT — privat")
+    p.add_argument("--kanon", default=None,
+                   help="Kanon-Namensliste-CSV (typ;en;de;quelle): prüft "
+                        "zusätzlich offizielle EN-Namen im DE-Text und "
+                        "offizielle DE-Namen in der EN-Quelle (Fehl-"
+                        "übersetzungen) → kanon_check.csv; ENTHÄLT TEXT — "
+                        " privat")
     args = p.parse_args()
 
     with open(args.csv, encoding="utf-8", newline="") as fh:
@@ -545,6 +658,15 @@ def main() -> int:
     if args.glossary and not glossary:
         print(f"⚠ Glossar nicht lesbar: {args.glossary}", file=sys.stderr)
     print(f"→ {len(glossary)} Glossar-Einträge", file=sys.stderr)
+
+    kanon = None
+    if args.kanon:
+        kanon = load_kanon(args.kanon)
+        if not kanon[2]:
+            print(f"⚠ Kanon-Namensliste leer/nicht lesbar: {args.kanon}",
+                  file=sys.stderr)
+        else:
+            print(f"→ {kanon[2]} Kanon-Namen geladen", file=sys.stderr)
 
     groups, suppressed = build_groups(rows, threshold=args.threshold,
                                       strict=args.strict, glossary=glossary)
@@ -598,6 +720,25 @@ def main() -> int:
         print(f"→ {wpath} (enthält Textinhalte — nicht öffentlich "
               f"committen)", file=sys.stderr)
 
+    # -- Kanon-Check (offizielle EN-Namen im DE-Text und umgekehrt;
+    #    ENTHÄLT TEXT — privat ablegen, nie öffentlich committen)
+    kanon_findings: list[dict] = []
+    if kanon:
+        kanon_findings = kanon_check_rows(rows, kanon)
+        kpath = os.path.join(args.out_dir, "kanon_check.csv")
+        with open(kpath, "w", encoding="utf-8", newline="") as fh:
+            w = csv.writer(fh, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            w.writerow(["id", "en", "de", "richtung", "name", "erwartet",
+                        "typ", "quelle"])
+            for f in kanon_findings:
+                w.writerow([f["id"], f["en"], f["de"], f["richtung"],
+                            f["name"], f["erwartet"], f["typ"],
+                            f["quelle"]])
+        n_krows = len({f["id"] for f in kanon_findings})
+        print(f"→ {kpath} ({len(kanon_findings)} Befunde in {n_krows} "
+              f"Zeilen; enthält Textinhalte — nicht öffentlich committen)",
+              file=sys.stderr)
+
     # -- maschinenlesbares Detailergebnis (ENTHÄLT TEXT — nie öffentlich committen)
     jpath = os.path.join(args.out_dir, "konsistenz_results.json")
     with open(jpath, "w", encoding="utf-8") as fh:
@@ -608,6 +749,13 @@ def main() -> int:
             "threshold": args.threshold,
             "strict": args.strict,
             "suppressed_templates": suppressed,
+            "kanon": None if kanon is None else {
+                "names": kanon[2],
+                "findings": len(kanon_findings),
+                "rows_affected": len({f["id"] for f in kanon_findings}),
+                "by_direction": dict(Counter(f["richtung"]
+                                             for f in kanon_findings)),
+            },
             "groups": [
                 {"gruppe": g["gruppe"],
                  "ids": sorted(r["id"] for r in g["rows"]),
@@ -643,6 +791,26 @@ def main() -> int:
             f"{len(g['de_variants'])} | {dec['mode']} | "
             + ", ".join(k for k, _ in kates.most_common(3)) + " |")
     add("")
+    if kanon is not None:
+        add("## Kanon-Check (offizielle Namen, `--kanon`)")
+        add("")
+        add(f"> Geprüfte Zeilen: **{len(rows)}** · Kanon-Namen: "
+            f"**{kanon[2]}** · Befunde: **{len(kanon_findings)}** "
+            f"in {len({f['id'] for f in kanon_findings})} Zeilen "
+            "(Details: `kanon_check.csv` — privat)")
+        add("")
+        by_dir = Counter(f["richtung"] for f in kanon_findings)
+        add("| Richtung | Befunde |")
+        add("|---|---|")
+        for d in ("en_name_in_de", "de_name_in_en"):
+            add(f"| {d} | {by_dir.get(d, 0)} |")
+        add("")
+        by_name = Counter(f["name"] for f in kanon_findings)
+        if by_name:
+            add("Häufigste Namen (nur Namen, keine Textinhalte): "
+                + ", ".join(f"{n} ({c})" for n, c in
+                            by_name.most_common(15)))
+            add("")
     add("## Methode (reproduzierbar)")
     add("")
     add("- Normalisierung: Steuerzeichen (\\\\n, \\\\p, \\\\l, ...) und "
@@ -669,6 +837,15 @@ def main() -> int:
         "unterdrückt, wenn die DE-Fassungen mit gleicher Slot-Anzahl "
         "differieren (pro Zeile müssen Typen und Glossar-Namen "
         "korrespondieren; sonst bleibt die Gruppe stehen)")
+    if kanon is not None:
+        add("- **Kanon-Check** (`--kanon`): pro Zeile wird die DE-Fassung "
+            "auf offizielle EN-Namen und die EN-Quelle auf offizielle "
+            "DE-Namen geprüft (Wortgrenzen, Groß-/Kleinschreibung-treu); "
+            "kein Befund, wenn das zugehörige offizielle Namens-"
+            "Entsprechende in derselben Fassung vorkommt, der Name in "
+            "EN und DE identisch ist, oder die Zeile selbst effektiv "
+            "nicht übersetzt ist (EN == DE nach Normalisierung, z. B. "
+            "Marken-Platzhalter)")
     add("- Vorschlag (sonst): häufigste Fassung (Gleichstand: erste Vorkunft "
         "in Dateireihenfolge) — deterministisch, ohne Zufall und ohne LLM")
     add("")
@@ -679,10 +856,13 @@ def main() -> int:
     print(f"→ {mpath}", file=sys.stderr)
 
     print(f"\n=== ZUSAMMENFASSUNG ===", file=sys.stderr)
+    kanon_note = (f" | Kanon-Befunde: {len(kanon_findings)}"
+                  if kanon is not None else "")
     print(f"Zeilen: {len(rows)} | Gruppen: {len(groups)} "
           f"(exakt {exact}, nähere {len(groups) - exact}) | "
           f"Kontext: {n_kontext} | Glossar: {n_glossar} | "
-          f"Vorlagen unterdrückt: {len(suppressed)}", file=sys.stderr)
+          f"Vorlagen unterdrückt: {len(suppressed)}{kanon_note}",
+          file=sys.stderr)
     return 0
 
 
