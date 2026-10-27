@@ -487,6 +487,18 @@ def decide_group(g: dict, glossary: list[dict]) -> dict:
             if context_mode else "winner", "basis": basis}
 
 
+def distinct_values(rows: list[dict], key: str) -> list[str]:
+    """Distinct non-empty values of a row column, first-seen order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in rows:
+        v = (r.get(key) or "").strip()
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 # --------------------------------------------------------------------------
 # Output
 # --------------------------------------------------------------------------
@@ -504,6 +516,10 @@ def main() -> int:
                    help="nur exakt identische EN-Quellen")
     p.add_argument("--top", type=int, default=20,
                    help="Gruppen in der Report-Topliste")
+    p.add_argument("--werkstatt", action="store_true",
+                   help="zusätzliches Werkstatt-CSV im Dialogwerkstatt-"
+                        "Einleseformat (gruppe;ids;en;de_varianten;vorschlag;"
+                        "grund;kategorie;ort;status); ENTHÄLT TEXT — privat")
     args = p.parse_args()
 
     with open(args.csv, encoding="utf-8", newline="") as fh:
@@ -559,6 +575,28 @@ def main() -> int:
             w.writerow([g["gruppe"], ids, en_vars, de_vars,
                         dec["vorschlag"], dec["grund"]])
     print(f"→ {epath}", file=sys.stderr)
+
+    # -- Werkstatt-CSV (Einleseformat der Dialogwerkstatt; ENTHÄLT TEXT —
+    #    privat ablegen, nie öffentlich committen)
+    if args.werkstatt:
+        wpath = os.path.join(args.out_dir, "werkstatt_einheitlichkeit.csv")
+        with open(wpath, "w", encoding="utf-8", newline="") as fh:
+            w = csv.writer(fh, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            w.writerow(["gruppe", "ids", "en", "de_varianten", "vorschlag",
+                        "grund", "kategorie", "ort", "status"])
+            for g in groups:
+                dec = decisions[g["gruppe"]]
+                ids = ",".join(sorted(r["id"] for r in g["rows"]))
+                en_vars = " | ".join(g["raw_en"][e] for e in g["en_variants"])
+                de_vars = " | ".join(v[2] for v in g["de_variants"])
+                w.writerow([g["gruppe"], ids, en_vars, de_vars,
+                            dec["vorschlag"], dec["grund"],
+                            ",".join(distinct_values(g["rows"], "kategorie")),
+                            ",".join(distinct_values(g["rows"], "ort")),
+                            "kontext_pruefen" if dec["mode"] == "kontext"
+                            else "vorschlag"])
+        print(f"→ {wpath} (enthält Textinhalte — nicht öffentlich "
+              f"committen)", file=sys.stderr)
 
     # -- maschinenlesbares Detailergebnis (ENTHÄLT TEXT — nie öffentlich committen)
     jpath = os.path.join(args.out_dir, "konsistenz_results.json")

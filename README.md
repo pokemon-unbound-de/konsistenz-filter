@@ -76,12 +76,18 @@ python3 konsistenz_filter.py \
 | `--threshold` | Jaccard-Schwelle für „fast identisch“ (Default 0.85) |
 | `--strict` | nur exakt identische EN-Quellen (konservatives Baseline) |
 | `--top` | Topliste-Größe im Report (Default 20) |
+| `--werkstatt` | zusätzliches `werkstatt_einheitlichkeit.csv` im Dialogwerkstatt-Einleseformat |
 
 ### Ausgabe
 
 - `ergebnis.csv` — **Lieferformat**: `gruppe;ids;en_varianten;de_varianten;vorschlag;grund`
   (ids mit `,` getrennt, Varianten mit ` | `; `vorschlag` = `Kontext prüfen`
   oder eine der `de_varianten`, die am häufigsten zuerst steht)
+- `werkstatt_einheitlichkeit.csv` (nur mit `--werkstatt`) — **Dialogwerkstatt-
+  Einleseformat**: `gruppe;ids;en;de_varianten;vorschlag;grund;kategorie;ort;status`
+  (`status` = `vorschlag` / `kontext_pruefen`; `kategorie`/`ort` sind die
+  Kontext-Spalnen der Gruppe, kommagetrennt). Eine Karte pro Gruppe für die
+  Werkstatt. **Enthält Textinhalte** — privat ablegen.
 - `konsistenz_report.md` — **nur Aggregat** (keine Textinhalte, öffentlich sicher)
 - `konsistenz_results.json` — maschinenlesbar, **enthält Textinhalte**
 
@@ -89,8 +95,8 @@ python3 konsistenz_filter.py \
 
 - **Lese-only** — Eingabe wird nicht geändert.
 - **Keine Spieltexte in öffentlichen Repos** — Code, Tests (synthetische
-  Fixtures), Report-Aggregat und Doku sind public-safe; `ergebnis.csv`
-  und `konsistenz_results.json` bleiben privat.
+  Fixtures), Report-Aggregat und Doku sind public-safe; `ergebnis.csv`,
+  `werkstatt_einheitlichkeit.csv` und `konsistenz_results.json` bleiben privat.
 - **Reproduzierbar**: gleicher Input + gleiche Parameter → gleicher Output
   (deterministisch, sortierte Verarbeitung, keine LLM).
 
@@ -102,6 +108,11 @@ Kontext-Regel. Baseline: `--strict` (nur Exakt-Gruppen, höchste Präzision).
 
 ## Versionen
 
+- **v0.4.1** — Werkstatt-Format: zusätzliches `werkstatt_einheitlichkeit.csv`
+  (`--werkstatt`) im Dialogwerkstatt-Einleseformat
+  `gruppe;ids;en;de_varianten;vorschlag;grund;kategorie;ort;status`
+  (eine Karte pro Gruppe, `status` = `vorschlag`/`kontext_pruefen`), damit die
+  Werkstatt die Gruppen direkt einlesen kann
 - **v0.4** — strukturelle Ersatz-Vorlagen-Erkennung ohne Namensliste
   (das Namensverzeichnis enthält keine Pokémon-Namen, nur Figuren/
   Trainer/Items): positionsbasiert (gleiche Wortzahl, Slot nur bei

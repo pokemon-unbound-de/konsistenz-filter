@@ -59,6 +59,41 @@ class KonsistenzFilterTests(unittest.TestCase):
                   newline="") as fh:
             return list(csv.DictReader(fh, delimiter=";"))
 
+    def test_werkstatt_csv_format(self):
+        # Werkstatt-Einleseformat: 9 Spalten, status vorschlag/kontext_pruefen,
+        # kategorie/ort als Kontext-Spalten gefüllt
+        make_csv(self.csv_path, [
+            ("0x0001", "You found a key!", "Du hast einen Schluessel gefunden!", "scripts", "Dorf"),
+            ("0x0002", "You found a key!", "Du hast einen Schluessel gefunden!", "scripts", "Dorf"),
+            ("0x0003", "You found a key!", "Du hast den Schluessel gefunden.", "scripts", "Dorf"),
+            ("0x0004", "The door is locked.", "Die Tuer ist verschlossen.", "scripts", "Dorf"),
+            ("0x0005", "The door is locked.", "Die Tuer ist zu.", "system_kampf", "Stadt"),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir,
+                      "--werkstatt"])
+        with open(os.path.join(self.out_dir, "werkstatt_einheitlichkeit.csv"),
+                  encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh, delimiter=";"))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(list(rows[0].keys()),
+                         ["gruppe", "ids", "en", "de_varianten", "vorschlag",
+                          "grund", "kategorie", "ort", "status"])
+        by_status = {r["status"]: r for r in rows}
+        self.assertEqual(set(by_status), {"vorschlag", "kontext_pruefen"})
+        self.assertEqual(by_status["vorschlag"]["ids"],
+                         "0x0001,0x0002,0x0003")
+        self.assertEqual(by_status["vorschlag"]["kategorie"], "scripts")
+        self.assertEqual(by_status["vorschlag"]["ort"], "Dorf")
+        self.assertEqual(by_status["kontext_pruefen"]["ids"], "0x0004,0x0005")
+        self.assertEqual(by_status["kontext_pruefen"]["vorschlag"],
+                         "Kontext prüfen")
+        # Default-Lauf erzeugt KEIN Werkstatt-CSV
+        patched_argv(["--csv", self.csv_path,
+                      "--out-dir", os.path.join(self.temp.name, "out2")])
+        self.assertFalse(os.path.exists(
+            os.path.join(self.temp.name, "out2",
+                         "werkstatt_einheitlichkeit.csv")))
+
     def test_exact_en_different_de_majority_wins(self):
         make_csv(self.csv_path, [
             ("0x0001", "You found a key!", "Du hast einen Schluessel gefunden!", "scripts", ""),
