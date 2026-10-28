@@ -17,6 +17,7 @@ Werkstatt jede Konsistenz-Entscheidung **nur einmal** treffen.
 | `docs/NAMENSVERZEICHNIS.md` maßgeblich, offizielle deutsche Pokémon-Begriffe gehen immer vor | `--glossary`: kanonischer DE-Name gewinnt **vor** der Majorität |
 | Gleiches EN kann je nach Sprecher/Situation **bewusst** anders übersetzt sein (`kategorie`/`ort`) | Gruppen über mehrere Orte/Kategorien → `Kontext prüfen`, **kein** Gewinner |
 | Dialoge passen zur Figur (Kinder/Freunde locker per Du, Autoritäten förmlicher) | Registerwechsel (formelles „Sie“ vs. „du“) innerhalb einer Gruppe → `Kontext prüfen` |
+| Ähnliche, aber inhaltlich verschiedene EN-Quellen nie blind vereinheitlichen (#39-Korrekturrunde) | Gruppen mit Jaccard-merge (EN nur ähnlich) → `Kontext prüfen`, **kein** Gewinner; Groß-/Kleinschreib- und Punktuation-Varianten mit gleichem EN-Skelett behalten den Vorschlag |
 | Kampf-/Systemtexte: offizielles Gen-3-Wortlaut, Präsens | System-Gruppen (`ort=system_kampf`) erhalten eine Prüfhinweis-Notiz in der Begründung |
 | Zeilenumbrüche und Steuerzeichen (`\n`, `\p`, `[…]`) zählen nicht als Unterschied | werden in der Normalisierung zu Leerzeichen normalisiert |
 
@@ -50,7 +51,8 @@ treffen).
    bleiben unterschiedliche Tokens (andere Puffer = andere Vorlagen)
 4. **DE-Varianten**: Unterschiede nur in Groß-/Kleinschreibung oder
    Satzendepunktuation gelten als identisch
-5. **Entscheidung pro Gruppe**: Kontext-Modus → `Kontext prüfen`;
+5. **Entscheidung pro Gruppe**: Kontext-Modus (mehrere Orte/Kategorien,
+   Registerwechsel, Jaccard-merge/ähnliche EN) → `Kontext prüfen`;
    sonst Glossar-Treffer → kanonische Fassung; sonst Majorität
    (Gleichstand: erste Vorkunft in Dateireihenfolge)
 
@@ -82,11 +84,12 @@ python3 konsistenz_filter.py \
 ### Ausgabe
 
 - `ergebnis.csv` — **Lieferformat**: `gruppe;ids;en_varianten;de_varianten;vorschlag;grund`
-  (ids mit `,` getrennt, Varianten mit ` | `; `vorschlag` = `Kontext prüfen`
-  oder eine der `de_varianten`, die am häufigsten zuerst steht)
+  (ids als `script:<adresse>`, mit `,` getrennt, Varianten mit ` | `;
+  `vorschlag` = `Kontext prüfen` oder eine der `de_varianten`, die am
+  häufigsten zuerst steht)
 - `werkstatt_einheitlichkeit.csv` (nur mit `--werkstatt`) — **Dialogwerkstatt-
   Einleseformat**: `gruppe;ids;en;de_varianten;vorschlag;grund;kategorie;ort;status`
-  (`status` = `vorschlag` / `kontext_pruefen`; `kategorie`/`ort` sind die
+  (ids als `script:<adresse>`; `status` = `vorschlag` / `kontext_pruefen`; `kategorie`/`ort` sind die
   Kontext-Spalnen der Gruppe, kommagetrennt). Eine Karte pro Gruppe für die
   Werkstatt. **Enthält Textinhalte** — privat ablegen.
 - `konsistenz_report.md` — **nur Aggregat** (keine Textinhalte, öffentlich sicher)
@@ -127,6 +130,14 @@ Kontext-Regel. Baseline: `--strict` (nur Exakt-Gruppen, höchste Präzision).
 
 ## Versionen
 
+- **v0.6** — Korrekturrunde Issue #39: (a) Gruppen-Mitglieds-IDs in
+  `ergebnis.csv` und `werkstatt_einheitlichkeit.csv` im Werkstatt-Format
+  `script:<adresse>` (idempotent; `kanon_check.csv` und JSON behalten die
+  Roh-ID), (b) Gruppen mit nur ähnlichen EN-Quellen (Jaccard-merge) →
+  `Kontext prüfen` ohne Gewinner — eine Einheitsfassung wird nie blind
+  vervielfältigt (Groß-/Kleinschreib- und Punktuation-Varianten mit
+  gleichem EN-Skelett behalten den Vorschlag), (c) Report dokumentiert
+  beide Regeln
 - **v0.5** — Kanon-Check (`--kanon`): offizielle EN/DE-Namen (aus der
   [Kanon-Namensliste](https://github.com/pokemon-unbound-de/kanon-namensliste),
   Gen 1–9 + aktuelle Zusätze) werden pro Zeile in beide Richtungen geprüft —

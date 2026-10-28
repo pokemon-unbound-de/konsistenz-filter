@@ -16,6 +16,13 @@ Project rules (Werkstatt, Issue #39):
     purpose (speaker/situation). Groups spanning different locations or
     categories, or mixing formal/informal register (Sie/du), are marked
     "Kontext prüfen" instead of proposing a winner.
+  * Similar EN sources (Jaccard-merge: near-identical but different
+    content) are also "Kontext prüfen" — an unambiguous reading is never
+    blindly duplicated (Issue #39 Korrekturrunde). Case/punctuation
+    variants of the same skeleton keep the proposal.
+  * Group member ids in the output CSVs use the workshop format
+    `script:<adresse>` (idempotent); single-line references
+    (kanon_check.csv, JSON) keep the raw id.
   * Battle/system texts: Gen-3 wording, present tense (checked by the
     workshop — the tool adds a reminder to the rationale).
   * Line breaks / control codes never count as a difference.
@@ -31,7 +38,8 @@ Pipeline:
   5. Decide per group: context mode (Kontext prüfen) vs. winner
      (glossary first, then frequency; ties: file order)
   6. Output: ergebnis.csv (gruppe;ids;en_varianten;de_varianten;
-     vorschlag;grund) + konsistenz_report.md (aggregates only)
+     vorschlag;grund; ids als `script:<adresse>`) +
+     konsistenz_report.md (aggregates only)
 
 Safety: input is read-only. Game text must never be committed to public
 repositories — only this tool, the report aggregates and the method docs
@@ -418,11 +426,19 @@ def build_groups(rows: list[dict], threshold: float, strict: bool,
 
 def decide_group(g: dict, glossary: list[dict]) -> dict:
     """Return {vorschlag, grund, mode, basis}:
-    mode  = "kontext"  (bewusster Unterschied möglich — kein Gewinner)
+    mode  = "kontext"  (bewusster Unterschied möglich — kein Gewinner;
+           gilt auch für Gruppen mit nur ähnlichen EN-Quellen, d. h.
+           Jaccard-merge: deren Inhalte dürfen bewusst abweichen,
+           Issue #39 Korrekturrunde)
     basis = "glossar" | "majoritaet" (wer gewinnt und warum)
     """
     n = len(g["rows"])
     d = len(g["de_variants"])
+    # Jaccard-merge (EN nur ähnlich, nicht gleich) bedeutet inhaltlich
+    # verschiedene Fassungen: nie blind vereinheitlichen -> Kontext-Modus.
+    # Große-/Kleine-Schreib- und Punktuation-Varianten mit gleichem
+    # Skelett (kein Jaccard-merge) behalten den Vorschlag.
+    similar_en = g.get("sim_min") is not None
     if not g["near"]:
         kind = "exakt identisch"
     elif g.get("sim_min") is not None:
@@ -436,7 +452,8 @@ def decide_group(g: dict, glossary: list[dict]) -> dict:
     register_conflict = len(register) > 1
 
     notes: list[str] = []
-    context_mode = len(orts) > 1 or len(kates) > 1 or register_conflict
+    context_mode = (len(orts) > 1 or len(kates) > 1 or register_conflict
+                    or similar_en)
 
     glossary_hit = None
     if not context_mode:
@@ -463,6 +480,10 @@ def decide_group(g: dict, glossary: list[dict]) -> dict:
             reasons.append(f"Kategorien: {', '.join(kates)}")
         if register_conflict:
             reasons.append("Registerunterschied (formelles 'Sie' vs. 'du')")
+        if similar_en:
+            reasons.append("EN-Quellen nur ähnlich (Jaccard-merge) — "
+                           "inhaltlich unterschiedlich, keine automatische "
+                           "Vereinheitlichung")
         notes.append("Kontext: möglicher bewusster Unterschied — " + "; ".join(reasons))
     else:
         if glossary_hit:
@@ -497,6 +518,20 @@ def distinct_values(rows: list[dict], key: str) -> list[str]:
             seen.add(v)
             out.append(v)
     return out
+
+
+def card_id(rid: str) -> str:
+    """Gruppen-Mitglied-ID im Werkstatt-Format ``script:<Adresse>``.
+
+    Die Gruppen-CSVs (``ergebnis.csv``, ``werkstatt_einheitlichkeit.csv``)
+    verweisen auf Korpus-Zeilen über die ROM-Skript-Adresse im Format,
+    das die Dialogwerkstatt erwartet (Issue #39, Korrekturrunde).
+    Idempotent: IDs, die bereits mit ``script:`` beginnen, bleiben
+    unverändert. Einzelzeilen-Referenzen (``kanon_check.csv``, JSON)
+    behalten die Roh-ID, da sie keine Gruppen-Mitglieder sind.
+    """
+    rid = rid.strip()
+    return rid if rid.startswith("script:") else "script:" + rid
 
 
 # --------------------------------------------------------------------------
@@ -691,7 +726,7 @@ def main() -> int:
                     "vorschlag", "grund"])
         for g in groups:
             dec = decisions[g["gruppe"]]
-            ids = ",".join(sorted(r["id"] for r in g["rows"]))
+            ids = ",".join(sorted(card_id(r["id"]) for r in g["rows"]))
             en_vars = " | ".join(g["raw_en"][e] for e in g["en_variants"])
             de_vars = " | ".join(v[2] for v in g["de_variants"])
             w.writerow([g["gruppe"], ids, en_vars, de_vars,
@@ -708,7 +743,7 @@ def main() -> int:
                         "grund", "kategorie", "ort", "status"])
             for g in groups:
                 dec = decisions[g["gruppe"]]
-                ids = ",".join(sorted(r["id"] for r in g["rows"]))
+                ids = ",".join(sorted(card_id(r["id"]) for r in g["rows"]))
                 en_vars = " | ".join(g["raw_en"][e] for e in g["en_variants"])
                 de_vars = " | ".join(v[2] for v in g["de_variants"])
                 w.writerow([g["gruppe"], ids, en_vars, de_vars,
@@ -827,9 +862,12 @@ def main() -> int:
         "unterschiedliche Vorlagen)")
     add("- DE-Varianten: Unterschiede nur in Groß-/Kleinschreibung oder "
         "Satzendepunktuation gelten als identisch")
-    add("- **Kontext-Regel**: Gruppen über mehrere Orte/Kategorien oder mit "
-        "Registerwechsel (formelles 'Sie' vs. 'du') → 'Kontext prüfen', "
-        "kein Gewinner (bewusste Unterschiede je Sprecher/Situation)")
+    add("- **Kontext-Regel**: Gruppen über mehrere Orte/Kategorien, mit "
+        "Registerwechsel (formelles 'Sie' vs. 'du') oder mit nur ähnlichen "
+        "EN-Quellen (Jaccard-merge; deren Inhalte können bewusst "
+        "abweichen) → 'Kontext prüfen', kein Gewinner (bewusste "
+        "Unterschiede je Sprecher/Situation; eine Einheitsfassung wird "
+        "nicht blind vervielfältigt)")
     add("- **Glossar-Regel**: kanonischer DE-Name aus dem "
         "Namensverzeichnis gewinnt vor der Majorität (offizielle "
         "Pokémon-Begriffe gehen immer vor)")
@@ -840,6 +878,10 @@ def main() -> int:
         "unterdrückt, wenn die DE-Fassungen mit gleicher Slot-Anzahl "
         "differieren (pro Zeile müssen Typen und Glossar-Namen "
         "korrespondieren; sonst bleibt die Gruppe stehen)")
+    add("- **ID-Format**: Gruppen-Mitglieder in `ergebnis.csv` und "
+        "`werkstatt_einheitlichkeit.csv` als `script:<Adresse>` "
+        "(idempotent); Einzelzeilen-Referenzen (Kanon-Check, JSON) "
+        "behalten die Roh-ID")
     if kanon is not None:
         add("- **Kanon-Check** (`--kanon`): pro Zeile wird die DE-Fassung "
             "auf offizielle EN-Namen und die EN-Quelle auf offizielle "

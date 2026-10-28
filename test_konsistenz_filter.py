@@ -80,11 +80,13 @@ class KonsistenzFilterTests(unittest.TestCase):
                           "grund", "kategorie", "ort", "status"])
         by_status = {r["status"]: r for r in rows}
         self.assertEqual(set(by_status), {"vorschlag", "kontext_pruefen"})
+        # Gruppen-Mitglieder als script:<adresse> (Issue #39 Korrekturrunde)
         self.assertEqual(by_status["vorschlag"]["ids"],
-                         "0x0001,0x0002,0x0003")
+                         "script:0x0001,script:0x0002,script:0x0003")
         self.assertEqual(by_status["vorschlag"]["kategorie"], "scripts")
         self.assertEqual(by_status["vorschlag"]["ort"], "Dorf")
-        self.assertEqual(by_status["kontext_pruefen"]["ids"], "0x0004,0x0005")
+        self.assertEqual(by_status["kontext_pruefen"]["ids"],
+                         "script:0x0004,script:0x0005")
         self.assertEqual(by_status["kontext_pruefen"]["vorschlag"],
                          "Kontext prüfen")
         # Default-Lauf erzeugt KEIN Werkstatt-CSV
@@ -103,7 +105,8 @@ class KonsistenzFilterTests(unittest.TestCase):
         patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
         rows = self.load_results()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["ids"], "0x0001,0x0002,0x0003")
+        self.assertEqual(rows[0]["ids"],
+                         "script:0x0001,script:0x0002,script:0x0003")
         self.assertIn("Majorität", rows[0]["grund"])
         self.assertEqual(rows[0]["vorschlag"], "Du hast einen Schluessel gefunden!")
 
@@ -142,6 +145,11 @@ class KonsistenzFilterTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIn("fast identisch", rows[0]["grund"])
         self.assertEqual(len(rows[0]["ids"].split(",")), 2)
+        # Jaccard-merge (EN nur ähnlich, Inhalt unterscheidet sich) ->
+        # 'Kontext prüfen' statt Vorschlag (Issue #39 Korrekturrunde:
+        # Einheitsfassungen werden nie blind vervielfältigt)
+        self.assertEqual(rows[0]["vorschlag"], "Kontext prüfen")
+        self.assertIn("Jaccard-merge", rows[0]["grund"])
         # --strict muss diese nahe Gruppe ausschliessen
         patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir,
                       "--strict"])
@@ -351,9 +359,13 @@ class KonsistenzFilterTests(unittest.TestCase):
         patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
         rows = self.load_results()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["vorschlag"],
-                         "Wir gingen den ganzen Tag einen sehr langen Weg durch den Wald, um diesen Ort zu erreichen.")
-        self.assertIn("Majorität", rows[0]["grund"])
+        # Die Gruppe bleibt stehen (kleine Wörter sind KEINE Namen ->
+        # keine Unterdrückung); die Entscheidung ist nach der
+        # #39-Korrekturrunde 'Kontext prüfen' (Jaccard-merge), nicht
+        # Majorität: Der Inhalt unterscheidet sich (Wald/Wälder) und
+        # wird nicht blind vereinheitlicht.
+        self.assertEqual(rows[0]["vorschlag"], "Kontext prüfen")
+        self.assertIn("Jaccard-merge", rows[0]["grund"])
 
     def test_type_mismatch_row_keeps_group(self):
         # EN Fire-type, DE aber "Typ Wasser" -> Typ-Korrespondenz pro Zeile
@@ -393,7 +405,8 @@ class KonsistenzFilterTests(unittest.TestCase):
                       "--out-dir", self.out_dir])
         rows = self.load_results()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["ids"], "0x0001,0x0002,0x0003")
+        self.assertEqual(rows[0]["ids"],
+                         "script:0x0001,script:0x0002,script:0x0003")
 
     def test_first_last_position_diff_is_kept(self):
         # Differenz nur im ersten Wort (Punktuation) ist KEIN Slot —
@@ -471,6 +484,66 @@ class KonsistenzFilterTests(unittest.TestCase):
         a = Path(out_a, "ergebnis.csv").read_text(encoding="utf-8")
         b = Path(out_b, "ergebnis.csv").read_text(encoding="utf-8")
         self.assertEqual(a, b)
+
+    def test_card_id_helper(self):
+        # Werkstatt-Format script:<adresse>, idempotent (Issue #39)
+        self.assertEqual(kf.card_id("0x1A2B3C4"), "script:0x1A2B3C4")
+        self.assertEqual(kf.card_id("script:0x1A2B3C4"), "script:0x1A2B3C4")
+
+    def test_ids_script_prefix_in_csvs_and_raw_in_json(self):
+        make_csv(self.csv_path, [
+            ("0x0001", "Hello there!", "Hallo!", "scripts", ""),
+            ("0x0002", "Hello there!", "Hallo da!", "scripts", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir,
+                      "--werkstatt"])
+        rows = self.load_results()
+        self.assertEqual(rows[0]["ids"], "script:0x0001,script:0x0002")
+        with open(os.path.join(self.out_dir, "werkstatt_einheitlichkeit.csv"),
+                  encoding="utf-8", newline="") as fh:
+            wrows = list(csv.DictReader(fh, delimiter=";"))
+        self.assertEqual(wrows[0]["ids"], "script:0x0001,script:0x0002")
+        # JSON: Einzelzeilen-Referenzen behalten die Roh-ID
+        with open(os.path.join(self.out_dir, "konsistenz_results.json"),
+                  encoding="utf-8") as fh:
+            data = json.load(fh)
+        self.assertEqual(data["groups"][0]["ids"], ["0x0001", "0x0002"])
+
+    def test_similar_en_group_gets_context_check(self):
+        # Jaccard-merged Gruppe (EN nur ähnlich, Inhalt anders) ->
+        # 'Kontext prüfen' auch bei gleichem Ort und gleicher Kategorie
+        # (#39: Einheitsfassung wird nie blind vervielfältigt)
+        make_csv(self.csv_path, [
+            ("0x0001",
+             "Please bring me the old treasure map right now.",
+             "Bringe mir bitte die alte Schatzkarte.",
+             "scripts", "Hafenstadt"),
+            ("0x0002",
+             "Please bring me the new treasure map right now.",
+             "Bringe mir bitte die neue Schatzkarte.",
+             "scripts", "Hafenstadt"),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir,
+                      "--threshold", "0.80"])
+        rows = self.load_results()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["vorschlag"], "Kontext prüfen")
+        self.assertIn("Jaccard-merge", rows[0]["grund"])
+        self.assertEqual(rows[0]["ids"], "script:0x0001,script:0x0002")
+
+    def test_case_punctuation_variants_keep_winner(self):
+        # Gleiches EN-Skelett (nur Groß-/Kleinschreibung + Punktuation,
+        # kein Jaccard-merge) -> Vorschlag bleibt gültig (Majorität)
+        make_csv(self.csv_path, [
+            ("0x0001", "It's here.", "Es ist hier.", "scripts", ""),
+            ("0x0002", "IT'S HERE.", "Es ist hier.", "scripts", ""),
+            ("0x0003", "it's here!", "Hier ist es.", "scripts", ""),
+        ])
+        patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir])
+        rows = self.load_results()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["vorschlag"], "Es ist hier.")
+        self.assertIn("Majorität", rows[0]["grund"])
 
 
 def make_kanon(path, rows):
