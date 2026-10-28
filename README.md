@@ -84,12 +84,13 @@ python3 konsistenz_filter.py \
 ### Ausgabe
 
 - `ergebnis.csv` — **Lieferformat**: `gruppe;ids;en_varianten;de_varianten;vorschlag;grund`
-  (ids als `script:<adresse>`, mit `,` getrennt, Varianten mit ` | `;
+  (ids als kanonisches `script:`+Großhex-ohne-`0x`, z. B. `script:03D8802`,
+  mit `,` getrennt, Varianten mit ` | `;
   `vorschlag` = `Kontext prüfen` oder eine der `de_varianten`, die am
   häufigsten zuerst steht)
 - `werkstatt_einheitlichkeit.csv` (nur mit `--werkstatt`) — **Dialogwerkstatt-
   Einleseformat**: `gruppe;ids;en;de_varianten;vorschlag;grund;kategorie;ort;status`
-  (ids als `script:<adresse>`; `status` = `vorschlag` / `kontext_pruefen`; `kategorie`/`ort` sind die
+  (ids als kanonisches `script:`+Großhex-ohne-`0x`; `status` = `vorschlag` / `kontext_pruefen`; `kategorie`/`ort` sind die
   Kontext-Spalnen der Gruppe, kommagetrennt). Eine Karte pro Gruppe für die
   Werkstatt. **Enthält Textinhalte** — privat ablegen.
 - `konsistenz_report.md` — **nur Aggregat** (keine Textinhalte, öffentlich sicher)
@@ -130,6 +131,11 @@ Kontext-Regel. Baseline: `--strict` (nur Exakt-Gruppen, höchste Präzision).
 
 ## Versionen
 
+- **v0.7** — QA-Korrektur (2026-10-28): Gruppen-Mitglieds-IDs in
+  `ergebnis.csv` und `werkstatt_einheitlichkeit.csv` im **kanonischen
+  Dialogwerkstatt-Format** `script:`+Großhex **ohne `0x`**-Präfix
+  (z. B. `script:03D8802`, nicht `script:0x03D8802`); `kanon_check.csv`
+  und JSON behalten die Roh-ID
 - **v0.6** — Korrekturrunde Issue #39: (a) Gruppen-Mitglieds-IDs in
   `ergebnis.csv` und `werkstatt_einheitlichkeit.csv` im Werkstatt-Format
   `script:<adresse>` (idempotent; `kanon_check.csv` und JSON behalten die

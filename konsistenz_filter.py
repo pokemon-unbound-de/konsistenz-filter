@@ -20,9 +20,10 @@ Project rules (Werkstatt, Issue #39):
     content) are also "Kontext prüfen" — an unambiguous reading is never
     blindly duplicated (Issue #39 Korrekturrunde). Case/punctuation
     variants of the same skeleton keep the proposal.
-  * Group member ids in the output CSVs use the workshop format
-    `script:<adresse>` (idempotent); single-line references
-    (kanon_check.csv, JSON) keep the raw id.
+  * Group member ids in the output CSVs use the canonical workshop
+    format `script:` + Großhex OHNE `0x` (z. B. `script:03D8802`,
+    idempotent); single-line references (kanon_check.csv, JSON) keep
+    the raw id.
   * Battle/system texts: Gen-3 wording, present tense (checked by the
     workshop — the tool adds a reminder to the rationale).
   * Line breaks / control codes never count as a difference.
@@ -38,7 +39,7 @@ Pipeline:
   5. Decide per group: context mode (Kontext prüfen) vs. winner
      (glossary first, then frequency; ties: file order)
   6. Output: ergebnis.csv (gruppe;ids;en_varianten;de_varianten;
-     vorschlag;grund; ids als `script:<adresse>`) +
+      vorschlag;grund; ids als `script:`+Großhex-ohne-`0x`) +
      konsistenz_report.md (aggregates only)
 
 Safety: input is read-only. Game text must never be committed to public
@@ -524,14 +525,20 @@ def card_id(rid: str) -> str:
     """Gruppen-Mitglied-ID im Werkstatt-Format ``script:<Adresse>``.
 
     Die Gruppen-CSVs (``ergebnis.csv``, ``werkstatt_einheitlichkeit.csv``)
-    verweisen auf Korpus-Zeilen über die ROM-Skript-Adresse im Format,
-    das die Dialogwerkstatt erwartet (Issue #39, Korrekturrunde).
+    verweisen auf Korpus-Zeilen über die ROM-Skript-Adresse im
+    kanonischen Dialogwerkstatt-Format (Issue #39, Korrekturrunde,
+    QA 2026-10-28): ``script:`` + **Großhex ohne ``0x``**-Präfix,
+    z. B. ``script:03D8802`` (nicht ``script:0x03D8802``).
     Idempotent: IDs, die bereits mit ``script:`` beginnen, bleiben
     unverändert. Einzelzeilen-Referenzen (``kanon_check.csv``, JSON)
     behalten die Roh-ID, da sie keine Gruppen-Mitglieder sind.
     """
     rid = rid.strip()
-    return rid if rid.startswith("script:") else "script:" + rid
+    if rid.startswith("script:"):
+        return rid
+    if rid[:2].lower() == "0x":
+        rid = rid[2:]
+    return "script:" + rid.upper()
 
 
 # --------------------------------------------------------------------------
@@ -879,8 +886,9 @@ def main() -> int:
         "differieren (pro Zeile müssen Typen und Glossar-Namen "
         "korrespondieren; sonst bleibt die Gruppe stehen)")
     add("- **ID-Format**: Gruppen-Mitglieder in `ergebnis.csv` und "
-        "`werkstatt_einheitlichkeit.csv` als `script:<Adresse>` "
-        "(idempotent); Einzelzeilen-Referenzen (Kanon-Check, JSON) "
+        "`werkstatt_einheitlichkeit.csv` als kanonisches "
+        "`script:`+Großhex-ohne-`0x` (z. B. `script:03D8802`, "
+        "idempotent); Einzelzeilen-Referenzen (Kanon-Check, JSON) "
         "behalten die Roh-ID")
     if kanon is not None:
         add("- **Kanon-Check** (`--kanon`): pro Zeile wird die DE-Fassung "

@@ -82,11 +82,11 @@ class KonsistenzFilterTests(unittest.TestCase):
         self.assertEqual(set(by_status), {"vorschlag", "kontext_pruefen"})
         # Gruppen-Mitglieder als script:<adresse> (Issue #39 Korrekturrunde)
         self.assertEqual(by_status["vorschlag"]["ids"],
-                         "script:0x0001,script:0x0002,script:0x0003")
+                         "script:0001,script:0002,script:0003")
         self.assertEqual(by_status["vorschlag"]["kategorie"], "scripts")
         self.assertEqual(by_status["vorschlag"]["ort"], "Dorf")
         self.assertEqual(by_status["kontext_pruefen"]["ids"],
-                         "script:0x0004,script:0x0005")
+                         "script:0004,script:0005")
         self.assertEqual(by_status["kontext_pruefen"]["vorschlag"],
                          "Kontext prüfen")
         # Default-Lauf erzeugt KEIN Werkstatt-CSV
@@ -106,7 +106,7 @@ class KonsistenzFilterTests(unittest.TestCase):
         rows = self.load_results()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["ids"],
-                         "script:0x0001,script:0x0002,script:0x0003")
+                         "script:0001,script:0002,script:0003")
         self.assertIn("Majorität", rows[0]["grund"])
         self.assertEqual(rows[0]["vorschlag"], "Du hast einen Schluessel gefunden!")
 
@@ -406,7 +406,7 @@ class KonsistenzFilterTests(unittest.TestCase):
         rows = self.load_results()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["ids"],
-                         "script:0x0001,script:0x0002,script:0x0003")
+                         "script:0001,script:0002,script:0003")
 
     def test_first_last_position_diff_is_kept(self):
         # Differenz nur im ersten Wort (Punktuation) ist KEIN Slot —
@@ -486,9 +486,12 @@ class KonsistenzFilterTests(unittest.TestCase):
         self.assertEqual(a, b)
 
     def test_card_id_helper(self):
-        # Werkstatt-Format script:<adresse>, idempotent (Issue #39)
-        self.assertEqual(kf.card_id("0x1A2B3C4"), "script:0x1A2B3C4")
-        self.assertEqual(kf.card_id("script:0x1A2B3C4"), "script:0x1A2B3C4")
+        # Werkstatt-Format script:<Großhex ohne 0x>, idempotent
+        # (Issue #39, QA 2026-10-28)
+        self.assertEqual(kf.card_id("0x1A2B3C4"), "script:1A2B3C4")
+        self.assertEqual(kf.card_id("0x1a2b3c4"), "script:1A2B3C4")
+        self.assertEqual(kf.card_id("1A2B3C4"), "script:1A2B3C4")
+        self.assertEqual(kf.card_id("script:1A2B3C4"), "script:1A2B3C4")
 
     def test_ids_script_prefix_in_csvs_and_raw_in_json(self):
         make_csv(self.csv_path, [
@@ -498,11 +501,11 @@ class KonsistenzFilterTests(unittest.TestCase):
         patched_argv(["--csv", self.csv_path, "--out-dir", self.out_dir,
                       "--werkstatt"])
         rows = self.load_results()
-        self.assertEqual(rows[0]["ids"], "script:0x0001,script:0x0002")
+        self.assertEqual(rows[0]["ids"], "script:0001,script:0002")
         with open(os.path.join(self.out_dir, "werkstatt_einheitlichkeit.csv"),
                   encoding="utf-8", newline="") as fh:
             wrows = list(csv.DictReader(fh, delimiter=";"))
-        self.assertEqual(wrows[0]["ids"], "script:0x0001,script:0x0002")
+        self.assertEqual(wrows[0]["ids"], "script:0001,script:0002")
         # JSON: Einzelzeilen-Referenzen behalten die Roh-ID
         with open(os.path.join(self.out_dir, "konsistenz_results.json"),
                   encoding="utf-8") as fh:
@@ -529,7 +532,7 @@ class KonsistenzFilterTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["vorschlag"], "Kontext prüfen")
         self.assertIn("Jaccard-merge", rows[0]["grund"])
-        self.assertEqual(rows[0]["ids"], "script:0x0001,script:0x0002")
+        self.assertEqual(rows[0]["ids"], "script:0001,script:0002")
 
     def test_case_punctuation_variants_keep_winner(self):
         # Gleiches EN-Skelett (nur Groß-/Kleinschreibung + Punktuation,
