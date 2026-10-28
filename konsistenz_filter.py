@@ -529,13 +529,16 @@ def card_id(rid: str) -> str:
     kanonischen Dialogwerkstatt-Format (Issue #39, Korrekturrunde,
     QA 2026-10-28): ``script:`` + **Großhex ohne ``0x``**-Präfix,
     z. B. ``script:03D8802`` (nicht ``script:0x03D8802``).
-    Idempotent: IDs, die bereits mit ``script:`` beginnen, bleiben
-    unverändert. Einzelzeilen-Referenzen (``kanon_check.csv``, JSON)
-    behalten die Roh-ID, da sie keine Gruppen-Mitglieder sind.
+    Alle Alt-Formen werden kanonisiert (Nevio-Hinweis 6474012382):
+    Roh-ID mit/ohne ``0x``/``0X`` und Alt-Exporte
+    ``script:0x…``/``script:…klein`` → kanonisch; idempotent
+    (``card_id(card_id(x)) == card_id(x)``). Einzelzeilen-Referenzen
+    (``kanon_check.csv``, JSON) behalten die Roh-ID, da sie keine
+    Gruppen-Mitglieder sind.
     """
     rid = rid.strip()
     if rid.startswith("script:"):
-        return rid
+        rid = rid[len("script:"):]
     if rid[:2].lower() == "0x":
         rid = rid[2:]
     return "script:" + rid.upper()

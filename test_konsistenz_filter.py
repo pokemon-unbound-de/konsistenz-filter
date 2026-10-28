@@ -493,6 +493,20 @@ class KonsistenzFilterTests(unittest.TestCase):
         self.assertEqual(kf.card_id("1A2B3C4"), "script:1A2B3C4")
         self.assertEqual(kf.card_id("script:1A2B3C4"), "script:1A2B3C4")
 
+    def test_card_id_altformat_regression(self):
+        # Altbestands-Kante (Nevio 6474012382): bereits exportierte
+        # Alt-IDs 'script:0x…' (inkl. Kleinsthex) müssen kanonisiert
+        # werden, nicht unverändert durchgereicht.
+        self.assertEqual(kf.card_id("script:0x03d8802"), "script:03D8802")
+        self.assertEqual(kf.card_id("script:0x03D8802"), "script:03D8802")
+        self.assertEqual(kf.card_id("script:0X03D8802"), "script:03D8802")
+        self.assertEqual(kf.card_id("script:03d8802"), "script:03D8802")
+        # Idempotenz über alle Alt-Formen
+        for x in ("0x03d8802", "03D8802", "script:03D8802",
+                  "script:0x03d8802", "script:03d8802"):
+            self.assertEqual(kf.card_id(kf.card_id(x)), kf.card_id(x),
+                             msg=x)
+
     def test_ids_script_prefix_in_csvs_and_raw_in_json(self):
         make_csv(self.csv_path, [
             ("0x0001", "Hello there!", "Hallo!", "scripts", ""),

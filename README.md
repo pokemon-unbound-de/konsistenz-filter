@@ -131,6 +131,13 @@ Kontext-Regel. Baseline: `--strict` (nur Exakt-Gruppen, höchste Präzision).
 
 ## Versionen
 
+- **v0.7.1** — QA-Korrektur (2026-10-28): Altbestands-Kante in
+  `card_id()` (Nevio-Hinweis 6474012382): Alt-Formen mit `script:`-
+  Präfix werden jetzt ebenfalls kanonisiert — `script:0x03d8802` /
+  `script:0X…` / `script:…kleinhex` → `script:03D8802` (vorher blieben
+  bereits-präfixierte IDs unverändert durchgereicht). Idempotent über
+  alle Alt-Formen; Regressionstest `test_card_id_altformat_regression`.
+  Pipeline-Output unverändert (Re-Run byte-identisch, sha256)
 - **v0.7** — QA-Korrektur (2026-10-28): Gruppen-Mitglieds-IDs in
   `ergebnis.csv` und `werkstatt_einheitlichkeit.csv` im **kanonischen
   Dialogwerkstatt-Format** `script:`+Großhex **ohne `0x`**-Präfix
