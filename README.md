@@ -1,5 +1,7 @@
 # 🧩 Konsistenz-Filter
 
+> **English:** Consistency pre-filter for localization corpora: groups identical or near-identical source strings that were translated differently and proposes the canonical variant with a reproducible rationale. Data-agnostic, offline, deterministic; no game text in this repository.
+
 **Deterministischer Konsistenz-Vorfilter für EN/DE-Übersetzungskorpora (CSV).**
 
 Findet gleiche oder fast gleiche englische Sätze, die im Deutschen
